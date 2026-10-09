@@ -1,0 +1,12 @@
+{
+  "name": "VISION_AI",
+  "description": "Voice-first assistive PWA for blind and low-vision individuals featuring hands-free Gemini voice control, real-time camera obstacle detection, turn-by-turn navigation, and emergency SOS.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14141C" />
+      <stop offset="100%" stop-color="#1F2338" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#EF4444" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#bg)" />
+  <!-- Outer Vision Radar Waves -->
+  <circle cx="256" cy="256" r="190" fill="none" stroke="#38BDF8" stroke-width="8" stroke-opacity="0.25" stroke-dasharray="16 12" />
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#38BDF8" stroke-width="10" stroke-opacity="0.4" />
+  
+  <!-- Stylized Eye / Lens -->
+  <path d="M 96 256 C 144 160 368 160 416 256 C 368 352 144 352 96 256 Z" fill="none" stroke="url(#cyanGrad)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Iris and Core AI Pulse -->
+  <circle cx="256" cy="256" r="64" fill="url(#cyanGrad)" />
+  <circle cx="256" cy="256" r="32" fill="#FFFFFF" />
+  <circle cx="270" cy="242" r="10" fill="#14141C" />
+  
+  <!-- Soundwave Bars representing Voice First -->
+  <line x1="200" y1="390" x2="200" y2="430" stroke="#38BDF8" stroke-width="12" stroke-linecap="round" />
+  <line x1="228" y1="375" x2="228" y2="445" stroke="#38BDF8" stroke-width="12" stroke-linecap="round" />
+  <line x1="256" y1="360" x2="256" y2="460" stroke="#F59E0B" stroke-width="12" stroke-linecap="round" />
+  <line x1="284" y1="375" x2="284" y2="445" stroke="#38BDF8" stroke-width="12" stroke-linecap="round" />
+  <line x1="312" y1="390" x2="312" y2="430" stroke="#38BDF8" stroke-width="12" stroke-linecap="round" />
+</svg>
