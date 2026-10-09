@@ -127,8 +127,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         onStopDetection={onStopDetection}
       />
 
-      {/* 2. Hero Live Camera & Voice Assistant Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* 2. Hero Live Camera & Obstacle Vision Section (Expansive, Full Width up to 1400px) */}
+      <div className="w-full">
         <LiveCameraCard
           videoRef={videoRef}
           canvasRef={canvasRef}
@@ -138,20 +138,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           onStopDetection={onStopDetection}
           captureSnapshot={captureSnapshot}
         />
+      </div>
 
+      {/* 3. Voice Assistant & Navigation Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <VoiceAssistantCard
           onStartMic={onStartMic}
           onStopMic={onStopMic}
         />
+        <NavigationCard />
       </div>
 
-      {/* 3. Navigation & Live Detections Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <NavigationCard />
+      {/* 4. Live Detections Section */}
+      <div className="w-full">
         <LiveDetectionsTable />
       </div>
 
-      {/* 4. Recent Activities Section */}
+      {/* 5. Recent Activities Section */}
       <RecentActivitiesCard />
     </div>
   );

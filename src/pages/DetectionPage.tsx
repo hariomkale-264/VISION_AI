@@ -19,21 +19,24 @@ interface DetectionPageProps {
 
 export const DetectionPage: React.FC<DetectionPageProps> = (props) => {
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-[1400px] mx-auto">
       <div>
-        <h2 className="text-xl font-extrabold tracking-tight">Real-Time Object Detection</h2>
-        <p className="text-xs font-semibold opacity-70">
+        <h2 className="text-xl sm:text-2xl lg:text-3xl font-black tracking-tight">
+          Real-Time Object Detection
+        </h2>
+        <p className="text-xs sm:text-sm font-semibold opacity-75 mt-1">
           In-browser COCO-SSD neural network scanning all 80 object classes with 3D directional guidance.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <LiveCameraCard {...props} />
-        </div>
-        <div className="lg:col-span-1">
-          <LiveDetectionsTable />
-        </div>
+      {/* Main Spacious Detection Screen (up to 1400px on desktop, ~95% width on mobile) */}
+      <div className="w-full">
+        <LiveCameraCard {...props} />
+      </div>
+
+      {/* Live Detections Table */}
+      <div className="w-full">
+        <LiveDetectionsTable />
       </div>
     </div>
   );

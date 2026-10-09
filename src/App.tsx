@@ -100,7 +100,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen p-2 sm:p-4 lg:p-6 flex items-center justify-center font-sans transition-colors duration-200 ${
+      className={`min-h-screen p-1.5 sm:p-4 lg:p-6 flex items-center justify-center font-sans transition-colors duration-200 ${
         highContrast ? 'bg-black text-yellow-400' : 'bg-[#E8EAF3] text-gray-900'
       } ${largeText ? 'text-lg' : 'text-base'}`}
     >
@@ -124,7 +124,7 @@ export default function App() {
 
       {/* Main Soft-UI Dashboard Container */}
       <div
-        className={`w-full max-w-[1560px] min-h-[92vh] rounded-[32px] overflow-hidden flex flex-col lg:flex-row transition-all duration-300 relative ${
+        className={`w-full max-w-[1560px] min-h-[94vh] rounded-[24px] sm:rounded-[32px] overflow-hidden flex flex-col lg:flex-row transition-all duration-300 relative ${
           highContrast
             ? 'bg-black border-2 border-yellow-400 shadow-none'
             : 'bg-[#F4F5FB] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.08),0_0_1px_1px_rgba(0,0,0,0.04)] border border-white/60'
@@ -142,7 +142,7 @@ export default function App() {
           <LiveStatusStrip />
 
           {/* Scrollable Viewport Stage */}
-          <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto" role="main">
+          <main className="flex-1 p-2.5 sm:p-5 lg:p-7 overflow-y-auto" role="main">
             {activeTab === 'dashboard' && <DashboardPage {...commonPageProps} />}
             {activeTab === 'detection' && <DetectionPage {...commonPageProps} />}
             {activeTab === 'navigation' && <NavigationPage />}

@@ -184,21 +184,21 @@ export function useObjectDetection(
               // Draw bounding box
               const color = getClassColor(pred.class);
               ctx.strokeStyle = color;
-              ctx.lineWidth = 3.5;
+              ctx.lineWidth = 4;
               ctx.strokeRect(x, y, w, h);
 
-              // Draw filled badge tag
+              // Draw filled badge tag with high-contrast text
               const tagText = `${pred.class.toUpperCase()} ${Math.round(pred.score * 100)}%`;
-              ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
+              ctx.font = 'bold 16px "Plus Jakarta Sans", sans-serif';
               const textMetrics = ctx.measureText(tagText);
-              const tagHeight = 22;
-              const tagWidth = textMetrics.width + 14;
+              const tagHeight = 26;
+              const tagWidth = textMetrics.width + 16;
 
               ctx.fillStyle = color;
               ctx.fillRect(x, Math.max(0, y - tagHeight), tagWidth, tagHeight);
 
               ctx.fillStyle = '#FFFFFF';
-              ctx.fillText(tagText, x + 7, Math.max(16, y - 5));
+              ctx.fillText(tagText, x + 8, Math.max(18, y - 6));
             });
 
             // Mark nearest
