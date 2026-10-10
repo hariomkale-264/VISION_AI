@@ -4,7 +4,12 @@
  */
 
 import { useAppStore } from '../store/appStore';
-import { getApiKey, notifyApiKeyMissing, GEMINI_DEFAULT_MODEL } from './apiKey';
+import {
+  getApiKey,
+  notifyApiKeyMissing,
+  GEMINI_DEFAULT_MODEL,
+  GEMINI_FALLBACK_MODEL,
+} from './apiKey';
 
 export interface GeminiVoiceResponse {
   transcript: string;
@@ -160,10 +165,15 @@ export function formatSpecificError(err: any): { spoken: string; debug: string }
   }
 
   // 404 Model not found
-  if (msg.includes('404') || msg.includes('not found')) {
+  if (
+    msg.includes('404') ||
+    msg.toLowerCase().includes('not found') ||
+    msg.includes('Requested entity was not found') ||
+    err?.status === 404
+  ) {
     const res = {
-      spoken: 'Model is currently not available in this project.',
-      debug: `HTTP 404 Model ${GEMINI_DEFAULT_MODEL} not found in project`,
+      spoken: 'The requested AI model is currently not available. Please check your settings.',
+      debug: `HTTP 404: Model not found. Attempted ${GEMINI_DEFAULT_MODEL} with fallback ${GEMINI_FALLBACK_MODEL}.`,
     };
     useAppStore.getState().setLastErrorDebug(res.debug);
     return res;
@@ -191,6 +201,60 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 8
 }
 
 /**
+ * Executes a direct Gemini REST request with automatic 404 fallback to gemini-3.5-flash-lite.
+ */
+async function callGeminiDirectWithFallback(apiKey: string, body: any, timeoutMs = 8000): Promise<any> {
+  const primaryUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${apiKey}`;
+  const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FALLBACK_MODEL}:generateContent?key=${apiKey}`;
+
+  let res = await fetchWithTimeout(
+    primaryUrl,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    timeoutMs
+  );
+
+  if (res.status === 404) {
+    console.warn(
+      `[Gemini Direct] Model ${GEMINI_DEFAULT_MODEL} returned 404. Retrying with fallback model ${GEMINI_FALLBACK_MODEL}...`
+    );
+    try {
+      const fallbackRes = await fetchWithTimeout(
+        fallbackUrl,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        timeoutMs
+      );
+      if (fallbackRes.ok) {
+        const json = await fallbackRes.json();
+        json._usedFallback = true;
+        return json;
+      }
+      res = fallbackRes;
+    } catch (_) {
+      // Continue to error check below
+    }
+  }
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(
+        `404: Requested model ${GEMINI_DEFAULT_MODEL} was not found, and fallback ${GEMINI_FALLBACK_MODEL} was also unavailable.`
+      );
+    }
+    throw new Error(`Gemini direct API error: ${res.status}`);
+  }
+
+  return await res.json();
+}
+
+/**
  * Direct REST fallback to Google GenAI API when server proxy is unavailable.
  */
 async function callDirectGemini(
@@ -203,8 +267,6 @@ async function callDirectGemini(
     notifyApiKeyMissing();
     throw new Error('401: Gemini API key is missing. Please add it in Settings.');
   }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${apiKey}`;
 
   const promptText = `Analyze this audio clip from the blind user. Current app context: ${JSON.stringify(context)}.
 Respond ONLY with a JSON object adhering to this schema:
@@ -235,21 +297,7 @@ Respond ONLY with a JSON object adhering to this schema:
     },
   };
 
-  const res = await fetchWithTimeout(
-    url,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-    8000
-  );
-
-  if (!res.ok) {
-    throw new Error(`Gemini direct API error: ${res.status}`);
-  }
-
-  const json = await res.json();
+  const json = await callGeminiDirectWithFallback(apiKey, body, 8000);
   const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
   return JSON.parse(rawText);
 }
@@ -384,8 +432,6 @@ export async function askGeneralQuestion(
     }
 
     // Direct fallback
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${apiKey}`;
-
     const promptBody = {
       system_instruction: {
         parts: [
@@ -399,21 +445,7 @@ export async function askGeneralQuestion(
       contents: [{ role: 'user', parts: [{ text: questionText }] }],
     };
 
-    const res = await fetchWithTimeout(
-      url,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(promptBody),
-      },
-      8000
-    );
-
-    if (!res.ok) {
-      throw new Error(`Gemini direct API error: ${res.status}`);
-    }
-
-    const json = await res.json();
+    const json = await callGeminiDirectWithFallback(apiKey, promptBody, 8000);
     const reply = json.candidates?.[0]?.content?.parts?.[0]?.text || 'I am here to assist you.';
     requestCache.set(cacheKey, { data: reply, timestamp: Date.now() });
     return reply;
@@ -469,28 +501,19 @@ export async function describeSurroundings(imageBase64: string): Promise<string>
     }
 
     // Direct fallback
-    const directRes = await fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
-                { text: prompt },
-              ],
-            },
+    const body = {
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+            { text: prompt },
           ],
-        }),
-      },
-      8000
-    );
+        },
+      ],
+    };
 
-    if (!directRes.ok) throw new Error(`Gemini direct API error: ${directRes.status}`);
-    const json = await directRes.json();
+    const json = await callGeminiDirectWithFallback(apiKey, body, 8000);
     return json.candidates?.[0]?.content?.parts?.[0]?.text || 'Path appears clear.';
   };
 
@@ -536,30 +559,112 @@ export async function readTextFromImage(imageBase64: string): Promise<string> {
     }
 
     // Direct fallback
-    const directRes = await fetchWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
-                { text: prompt },
-              ],
-            },
+    const body = {
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+            { text: prompt },
           ],
-        }),
-      },
-      8000
-    );
+        },
+      ],
+    };
 
-    if (!directRes.ok) throw new Error(`Gemini direct API error: ${directRes.status}`);
-    const json = await directRes.json();
+    const json = await callGeminiDirectWithFallback(apiKey, body, 8000);
     return json.candidates?.[0]?.content?.parts?.[0]?.text || 'No readable text found.';
   };
 
   return await scheduleRateLimitedCall(executeCall);
 }
+
+export interface FrameAnalysisResult {
+  text: string;
+  model: string;
+  isFallback: boolean;
+  latencyMs: number;
+}
+
+/**
+ * Analyzes a camera test video frame with Gemini for custom tasks.
+ */
+export async function analyzeFrameWithGemini(
+  imageBase64: string,
+  prompt: string = 'Identify the object and describe it'
+): Promise<FrameAnalysisResult> {
+  const startTime = Date.now();
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    notifyApiKeyMissing();
+    throw new Error('401: Gemini API key is missing. Please add it in Settings.');
+  }
+
+  const executeCall = async (): Promise<FrameAnalysisResult> => {
+    // 1. Try server endpoint first
+    try {
+      const res = await fetchWithTimeout(
+        '/api/gemini/analyze-frame',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-gemini-key': apiKey,
+          },
+          body: JSON.stringify({ imageBase64, mimeType: 'image/jpeg', prompt }),
+        },
+        12000
+      );
+
+      if (res.ok) {
+        const json = await res.json();
+        return {
+          text: json.result || 'No description returned.',
+          model: json.model || GEMINI_DEFAULT_MODEL,
+          isFallback: json.isFallback || false,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+      if (res.status === 429) throw new Error('429: Too many requests');
+      if (res.status === 401 || res.status === 403) throw new Error(`${res.status}: API key problem`);
+      if (res.status === 404) throw new Error('404: Model not found');
+    } catch (e: any) {
+      if (e.message?.includes('429') || e.message?.includes('401') || e.message?.includes('403')) {
+        throw e;
+      }
+    }
+
+    // 2. Direct client fallback with automatic 404 fallback handling
+    const body = {
+      system_instruction: {
+        parts: [
+          {
+            text:
+              'You are an intelligent vision assistant for the VISION_AI application. Answer the user prompt directly, concisely, and factually based on the camera image. In 2 to 4 sentences, describe the key objects, actions, text, or scene elements.',
+          },
+        ],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
+            { text: prompt },
+          ],
+        },
+      ],
+    };
+
+    const json = await callGeminiDirectWithFallback(apiKey, body, 12000);
+    const text =
+      json.candidates?.[0]?.content?.parts?.[0]?.text || 'No description returned.';
+    return {
+      text,
+      model: json._usedFallback ? GEMINI_FALLBACK_MODEL : GEMINI_DEFAULT_MODEL,
+      isFallback: !!json._usedFallback,
+      latencyMs: Date.now() - startTime,
+    };
+  };
+
+  return await scheduleRateLimitedCall(executeCall);
+}
+

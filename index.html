@@ -3,6 +3,121 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <script>
+      // In the AI Studio iframe environment, HMR WebSockets are disabled.
+      // Suppress unhandled WebSocket connection errors and mock vite-hmr socket.
+      (function() {
+        var origConsoleError = console.error;
+        console.error = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            var arg = arguments[i];
+            var msg = arg ? (arg.message || String(arg)) : '';
+            if (
+              msg.includes('WebSocket closed without opened') ||
+              (msg.includes('WebSocket') && msg.includes('closed')) ||
+              msg.includes('vite-hmr') ||
+              msg.includes('vite-ping')
+            ) {
+              return;
+            }
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+
+        var isWsError = function(msg) {
+          if (!msg) return false;
+          var s = String(msg);
+          return s.includes('WebSocket') || s.includes('ws://') || s.includes('wss://') || s.includes('vite-hmr') || s.includes('vite-ping');
+        };
+
+        window.addEventListener('error', function(event) {
+          if (event && (isWsError(event.message) || (event.error && isWsError(event.error.message)))) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && event.reason ? (event.reason.message || String(event.reason)) : '';
+          if (isWsError(reason)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+
+        // Intercept Vite HMR WebSocket connection in iframe environments
+        if (typeof window !== 'undefined' && window.WebSocket) {
+          var RealWebSocket = window.WebSocket;
+          window.WebSocket = function(url, protocols) {
+            var isViteHmr = false;
+            if (protocols === 'vite-hmr' || (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1)) {
+              isViteHmr = true;
+            }
+            if (typeof url === 'string' && (url.includes('vite') || url.includes('@vite'))) {
+              isViteHmr = true;
+            }
+
+            if (isViteHmr) {
+              var listeners = {};
+              var dummy = {
+                readyState: 1, // WebSocket.OPEN
+                url: url,
+                protocol: 'vite-hmr',
+                extensions: '',
+                bufferedAmount: 0,
+                binaryType: 'blob',
+                onopen: null,
+                onclose: null,
+                onerror: null,
+                onmessage: null,
+                addEventListener: function(type, listener) {
+                  listeners[type] = listeners[type] || [];
+                  listeners[type].push(listener);
+                  if (type === 'open') {
+                    setTimeout(function() {
+                      try {
+                        listener({ type: 'open', target: dummy });
+                      } catch (_) {}
+                    }, 0);
+                  }
+                },
+                removeEventListener: function(type, listener) {
+                  if (listeners[type]) {
+                    listeners[type] = listeners[type].filter(function(l) { return l !== listener; });
+                  }
+                },
+                dispatchEvent: function() { return true; },
+                send: function() {},
+                close: function(code, reason) {
+                  dummy.readyState = 3;
+                  if (dummy.onclose) {
+                    try {
+                      dummy.onclose({ type: 'close', wasClean: true, code: code || 1000, reason: reason || '' });
+                    } catch (_) {}
+                  }
+                }
+              };
+              setTimeout(function() {
+                if (dummy.onopen) {
+                  try {
+                    dummy.onopen({ type: 'open', target: dummy });
+                  } catch (_) {}
+                }
+              }, 0);
+              return dummy;
+            }
+
+            return new RealWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = RealWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+      })();
+    </script>
     <title>VISION_AI - Voice-First Assistive App</title>
     <meta name="description" content="Voice-first assistive PWA for blind and low-vision individuals featuring hands-free Gemini voice control, real-time camera obstacle detection, turn-by-turn navigation, and emergency SOS." />
     <meta property="og:title" content="VISION_AI - Voice-First Assistive App" />

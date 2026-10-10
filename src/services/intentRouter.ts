@@ -316,6 +316,26 @@ async function handleNavigateIntent(destinationQuery: string, userSpeech?: strin
     const firstStep = route.steps[0]?.instruction || `Proceed toward ${announceName}`;
     speechQueue.speak(`Starting navigation to ${announceName}. ${firstStep}.`, SpeechPriority.NAVIGATION);
 
+    // Set Google Maps Navigation state
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(announceName)}&travelmode=walking`;
+    let popupBlocked = false;
+    try {
+      const win = window.open(mapsUrl, '_blank');
+      if (!win || win.closed || typeof win.closed === 'undefined') {
+        popupBlocked = true;
+      }
+    } catch {
+      popupBlocked = true;
+    }
+
+    app.setGoogleMapsNav({
+      destination: announceName,
+      url: mapsUrl,
+      travelmode: 'walking',
+      heardTranscript: userSpeech || destinationQuery,
+      popupBlocked,
+    });
+
     const commandText = userSpeech?.trim() || `navigate to ${destinationQuery}`;
     stats.recordVoiceCommandSuccess(commandText, `Started route to ${announceName} (${formatDistance(route.distanceMeters)})`);
     stats.addActivity({

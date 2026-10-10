@@ -7,13 +7,23 @@ import { useAppStore } from '../store/appStore';
 import { speechQueue, SpeechPriority } from './speechQueue';
 
 export const GEMINI_STORAGE_KEY = 'vision_ai_gemini_key';
-export const GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
+export const GEMINI_DEFAULT_MODEL =
+  (import.meta as any).env?.VITE_GEMINI_MODEL ||
+  (typeof process !== 'undefined' && process.env?.VITE_GEMINI_MODEL) ||
+  'gemini-3.7-flash';
+export const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
+
+export function getGeminiModel(): string {
+  return GEMINI_DEFAULT_MODEL;
+}
 
 /**
  * Retrieves the Gemini API key checking in strict precedence order:
  * a) the key saved in Settings (localStorage "vision_ai_gemini_key")
- * b) import.meta.env.VITE_GEMINI_API_KEY
- * c) process.env.GEMINI_API_KEY (if defined)
+ * b) process.env.GEMINI_API_KEY (if defined)
+ * c) import.meta.env.GEMINI_API_KEY
+ * d) import.meta.env.VITE_GEMINI_API_KEY
+ * e) process.env.VITE_GEMINI_API_KEY
  * 
  * NEVER writes the key to console logs.
  */
@@ -28,7 +38,25 @@ export function getApiKey(): string | null {
     } catch (_) {}
   }
 
-  // 2. import.meta.env.VITE_GEMINI_API_KEY
+  // 2. process.env.GEMINI_API_KEY
+  try {
+    if (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) {
+      const procKey = process.env.GEMINI_API_KEY;
+      if (procKey && procKey.trim() && !procKey.includes('MY_GEMINI_API_KEY')) {
+        return procKey.trim();
+      }
+    }
+  } catch (_) {}
+
+  // 3. import.meta.env.GEMINI_API_KEY
+  try {
+    const metaKey = (import.meta as any).env?.GEMINI_API_KEY;
+    if (metaKey && String(metaKey).trim() && !String(metaKey).includes('MY_GEMINI_API_KEY')) {
+      return String(metaKey).trim();
+    }
+  } catch (_) {}
+
+  // 4. import.meta.env.VITE_GEMINI_API_KEY
   try {
     const viteKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
     if (viteKey && String(viteKey).trim() && !String(viteKey).includes('MY_GEMINI_API_KEY')) {
@@ -36,12 +64,12 @@ export function getApiKey(): string | null {
     }
   } catch (_) {}
 
-  // 3. process.env.GEMINI_API_KEY (if defined)
+  // 5. process.env.VITE_GEMINI_API_KEY
   try {
-    if (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) {
-      const procKey = process.env.GEMINI_API_KEY;
-      if (procKey && procKey.trim() && !procKey.includes('MY_GEMINI_API_KEY')) {
-        return procKey.trim();
+    if (typeof process !== 'undefined' && process.env?.VITE_GEMINI_API_KEY) {
+      const procVite = process.env.VITE_GEMINI_API_KEY;
+      if (procVite && procVite.trim() && !procVite.includes('MY_GEMINI_API_KEY')) {
+        return procVite.trim();
       }
     }
   } catch (_) {}
@@ -74,7 +102,8 @@ export function notifyApiKeyMissing(): void {
 }
 
 /**
- * Tests an API key against Gemini by sending one tiny request to gemini-2.5-flash.
+ * Tests an API key against Gemini by sending a lightweight generateContent request.
+ * If the primary model returns 404, automatically attempts the fallback model ("gemini-3.5-flash-lite").
  * Never logs the key to console.
  */
 export async function testApiKey(keyToTest: string): Promise<{ ok: boolean; message: string }> {
@@ -83,26 +112,51 @@ export async function testApiKey(keyToTest: string): Promise<{ ok: boolean; mess
     return { ok: false, message: 'Please provide an API key to test.' };
   }
 
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${key}`;
+  const primaryModel = GEMINI_DEFAULT_MODEL;
+  const fallbackModel = GEMINI_FALLBACK_MODEL;
+
+  const tryModel = async (model: string): Promise<Response> => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 9000);
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: 'Respond with OK.' }],
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: 'Respond with OK.' }],
+            },
+          ],
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (e) {
+      clearTimeout(timeoutId);
+      throw e;
+    }
+  };
 
-    clearTimeout(timeoutId);
+  try {
+    let response = await tryModel(primaryModel);
+
+    // If 404, attempt fallback model
+    if (response.status === 404) {
+      try {
+        const fallbackResponse = await tryModel(fallbackModel);
+        if (fallbackResponse.ok) {
+          return { ok: true, message: `Key works (using fallback model: ${fallbackModel})` };
+        }
+        response = fallbackResponse;
+      } catch (_) {
+        // Keep initial response if fallback throws
+      }
+    }
 
     if (response.ok) {
       return { ok: true, message: 'Key works' };
@@ -120,7 +174,10 @@ export async function testApiKey(keyToTest: string): Promise<{ ok: boolean; mess
       return { ok: false, message: `API key problem: ${detail}` };
     }
     if (response.status === 404) {
-      return { ok: false, message: `Model not found: ${detail}` };
+      return {
+        ok: false,
+        message: `Model not found (404). Neither ${primaryModel} nor fallback model ${fallbackModel} are available.`,
+      };
     }
     if (response.status === 429) {
       return { ok: false, message: `Too many requests (429): ${detail}` };

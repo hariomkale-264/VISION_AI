@@ -21,22 +21,28 @@ import {
   ExternalLink,
   Trash2,
   Sparkles,
+  Navigation,
 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
 import {
   GEMINI_STORAGE_KEY,
+  GEMINI_DEFAULT_MODEL,
+  GEMINI_FALLBACK_MODEL,
   getApiKey,
   maskApiKey,
   testApiKey,
 } from '../services/apiKey';
+import { CameraTestSection } from '../components/CameraTestSection';
 
 export const SettingsPage: React.FC = () => {
   const highContrast = useAppStore((s) => s.highContrast);
   const setHighContrast = useAppStore((s) => s.setHighContrast);
   const largeText = useAppStore((s) => s.largeText);
   const setLargeText = useAppStore((s) => s.setLargeText);
+  const autoStartTurnByTurn = useAppStore((s) => s.autoStartTurnByTurn);
+  const setAutoStartTurnByTurn = useAppStore((s) => s.setAutoStartTurnByTurn);
   const speechRate = useAppStore((s) => s.speechRate);
   const setSpeechRate = useAppStore((s) => s.setSpeechRate);
   const speechVolume = useAppStore((s) => s.speechVolume);
@@ -387,6 +393,26 @@ export const SettingsPage: React.FC = () => {
             </div>
           )}
 
+          {/* Active Model & Fallback Info */}
+          <div
+            className={`p-3 rounded-2xl text-xs flex flex-wrap items-center justify-between gap-2 border transition-all ${
+              highContrast
+                ? 'bg-zinc-950 border-yellow-400/60 text-yellow-300'
+                : 'bg-indigo-50/60 border-indigo-100 text-indigo-950'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-indigo-600 dark:text-yellow-400 shrink-0" />
+              <span className="font-semibold">Gemini Model:</span>
+              <span className="font-mono font-bold px-2 py-0.5 rounded-md bg-white/80 dark:bg-black/50 border border-indigo-200 dark:border-yellow-400/40">
+                {GEMINI_DEFAULT_MODEL}
+              </span>
+            </div>
+            <div className="text-[11px] opacity-75 font-mono">
+              Auto-fallback: {GEMINI_FALLBACK_MODEL}
+            </div>
+          </div>
+
           {/* Help text */}
           <div className="pt-2 text-xs flex items-center gap-1.5 opacity-80">
             <span>Get a free key at</span>
@@ -402,6 +428,9 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Camera Test Feature for Webcams / Laptops */}
+      <CameraTestSection />
 
       {/* Grid: Display & Contrast + Voice & Audio */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -530,6 +559,47 @@ export const SettingsPage: React.FC = () => {
                 <option value="mr-IN">Marathi (India) - मराठी</option>
               </select>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Google Maps Navigation Settings */}
+      <div
+        className={`rounded-[28px] p-6 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05)] transition-all border ${
+          highContrast
+            ? 'bg-black border-2 border-yellow-400 text-yellow-400'
+            : 'bg-white border-gray-100 text-gray-900'
+        }`}
+      >
+        <h3 className="font-extrabold text-base tracking-tight mb-4 flex items-center gap-2">
+          <Navigation className="w-5 h-5 text-indigo-600 dark:text-yellow-400" />
+          <span>Google Maps Navigation</span>
+        </h3>
+
+        <div className="space-y-4 text-xs">
+          {/* Auto-start turn-by-turn Toggle */}
+          <div className="flex items-center justify-between p-3.5 rounded-xl bg-gray-50/80 dark:bg-zinc-900">
+            <div className="pr-4">
+              <strong className="block font-bold">Auto-start turn-by-turn</strong>
+              <span className="opacity-70">
+                Directly launches active turn-by-turn navigation (&amp;dir_action=navigate). When off, Google Maps opens the route preview with Walk/Drive/Transit options. Default: Off.
+              </span>
+            </div>
+            <input
+              type="checkbox"
+              checked={autoStartTurnByTurn}
+              onChange={(e) => {
+                setAutoStartTurnByTurn(e.target.checked);
+                speechQueue.speak(
+                  e.target.checked
+                    ? 'Auto start turn-by-turn enabled'
+                    : 'Auto start turn-by-turn disabled',
+                  SpeechPriority.STATUS
+                );
+              }}
+              aria-label="Auto-start turn-by-turn navigation toggle"
+              className="w-5 h-5 accent-indigo-600 cursor-pointer shrink-0"
+            />
           </div>
         </div>
       </div>

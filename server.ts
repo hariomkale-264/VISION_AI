@@ -1,5 +1,7 @@
 import express from 'express';
+import http from 'http';
 import { createServer as createViteServer } from 'vite';
+import { WebSocketServer } from 'ws';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -23,6 +25,62 @@ if (apiKey) {
   });
 }
 
+// Single source of truth for the model name (VITE_GEMINI_MODEL in .env, default gemini-3.7-flash)
+const DEFAULT_MODEL = process.env.VITE_GEMINI_MODEL || 'gemini-3.7-flash';
+const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
+
+/**
+ * Executes a Gemini request with automatic 404 fallback to gemini-3.5-flash-lite.
+ */
+async function generateWithModelFallback(
+  client: GoogleGenAI,
+  params: {
+    contents: any;
+    config?: any;
+  }
+): Promise<any> {
+  try {
+    const res: any = await client.models.generateContent({
+      model: DEFAULT_MODEL,
+      ...params,
+    });
+    res.usedModel = DEFAULT_MODEL;
+    res.isFallback = false;
+    return res;
+  } catch (err: any) {
+    const is404 =
+      err?.status === 404 ||
+      String(err?.message || '').includes('404') ||
+      String(err?.message || '').toLowerCase().includes('not found') ||
+      String(err?.message || '').includes('Requested entity was not found');
+
+    if (is404) {
+      console.warn(
+        `[Gemini Server] Primary model "${DEFAULT_MODEL}" returned 404. Retrying with fallback model "${FALLBACK_MODEL}"...`
+      );
+      try {
+        const fallbackRes: any = await client.models.generateContent({
+          model: FALLBACK_MODEL,
+          ...params,
+        });
+        fallbackRes.usedModel = FALLBACK_MODEL;
+        fallbackRes.isFallback = true;
+        return fallbackRes;
+      } catch (fallbackErr: any) {
+        console.error(`[Gemini Server] Fallback model "${FALLBACK_MODEL}" also failed:`, fallbackErr);
+        const customErr: any = new Error(
+          `AI model "${DEFAULT_MODEL}" was not found (404), and fallback model "${FALLBACK_MODEL}" failed: ${
+            fallbackErr?.message || fallbackErr
+          }`
+        );
+        customErr.status = 404;
+        throw customErr;
+      }
+    }
+    throw err;
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -32,7 +90,7 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', hasGeminiKey: !!apiKey, app: 'VISION_AI' });
+    res.json({ status: 'ok', hasGeminiKey: !!apiKey, app: 'VISION_AI', model: DEFAULT_MODEL });
   });
 
   // Utterance analysis endpoint (Voice Assistant)
@@ -50,12 +108,11 @@ async function startServer() {
 
       if (!client) {
         return res.status(503).json({
-          error: 'No Gemini API key available on server or client.',
+          error: 'Gemini API key is missing. Please configure GEMINI_API_KEY in your environment or Settings.',
+          missingKey: true,
           offline: true,
         });
       }
-
-      const modelName = process.env.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
 
       const systemInstruction = `You are the voice controller of VISION_AI, an app for blind users. Understand natural speech in English, Hindi, Marathi or a mix, including paraphrases, accents and small speech errors. First transcribe the audio exactly, then infer the intent. Return ONLY valid JSON.
 Rules:
@@ -92,8 +149,7 @@ Respond ONLY with a JSON object adhering to this schema:
         },
       };
 
-      const result = await client.models.generateContent({
-        model: modelName,
+      const result = await generateWithModelFallback(client, {
         contents: [
           { role: 'user', parts: [audioPart, { text: promptText }] },
         ],
@@ -119,7 +175,15 @@ Respond ONLY with a JSON object adhering to this schema:
       }
     } catch (err: any) {
       console.error('Server error in /api/gemini/analyze-utterance:', err);
-      res.status(500).json({ error: err.message || 'Error processing audio' });
+      const is404 =
+        err?.status === 404 ||
+        String(err?.message || '').includes('404') ||
+        String(err?.message || '').toLowerCase().includes('not found');
+      const statusCode = is404 ? 404 : (err.status || 500);
+      const errorMessage = is404
+        ? `Model not found: The requested AI model (${DEFAULT_MODEL}) is unavailable. Please verify model configuration.`
+        : (err.message || 'Error processing audio');
+      res.status(statusCode).json({ error: errorMessage });
     }
   });
 
@@ -137,14 +201,15 @@ Respond ONLY with a JSON object adhering to this schema:
       }) : null);
 
       if (!client) {
-        return res.status(503).json({ error: 'No Gemini key available' });
+        return res.status(503).json({
+          error: 'Gemini API key is missing. Please configure GEMINI_API_KEY in your environment or Settings.',
+          missingKey: true,
+        });
       }
 
-      const modelName = process.env.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
       const prompt = 'You are helping a blind person walk safely. In 2 short sentences, describe the obstacles and hazards in front of them with direction (left, ahead, right) and approximate distance. Mention stairs, poles, walls, doors, vehicles, people and ground hazards.';
 
-      const result = await client.models.generateContent({
-        model: modelName,
+      const result = await generateWithModelFallback(client, {
         contents: [
           {
             role: 'user',
@@ -159,7 +224,15 @@ Respond ONLY with a JSON object adhering to this schema:
       res.json({ description: result.text || 'Path appears clear.' });
     } catch (err: any) {
       console.error('Server error in /api/gemini/describe-scene:', err);
-      res.status(500).json({ error: err.message || 'Error describing scene' });
+      const is404 =
+        err?.status === 404 ||
+        String(err?.message || '').includes('404') ||
+        String(err?.message || '').toLowerCase().includes('not found');
+      const statusCode = is404 ? 404 : (err.status || 500);
+      const errorMessage = is404
+        ? `Model not found: The requested AI model (${DEFAULT_MODEL}) is unavailable. Please verify model configuration.`
+        : (err.message || 'Error describing scene');
+      res.status(statusCode).json({ error: errorMessage });
     }
   });
 
@@ -177,14 +250,15 @@ Respond ONLY with a JSON object adhering to this schema:
       }) : null);
 
       if (!client) {
-        return res.status(503).json({ error: 'No Gemini key available' });
+        return res.status(503).json({
+          error: 'Gemini API key is missing. Please configure GEMINI_API_KEY in your environment or Settings.',
+          missingKey: true,
+        });
       }
 
-      const modelName = process.env.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
       const prompt = 'Read all visible text in this image clearly and concisely for a blind person. If no text is readable, say "No readable text found". Do not describe anything other than the text itself.';
 
-      const result = await client.models.generateContent({
-        model: modelName,
+      const result = await generateWithModelFallback(client, {
         contents: [
           {
             role: 'user',
@@ -199,7 +273,73 @@ Respond ONLY with a JSON object adhering to this schema:
       res.json({ text: result.text || 'No readable text found.' });
     } catch (err: any) {
       console.error('Server error in /api/gemini/read-text:', err);
-      res.status(500).json({ error: err.message || 'Error reading text' });
+      const is404 =
+        err?.status === 404 ||
+        String(err?.message || '').includes('404') ||
+        String(err?.message || '').toLowerCase().includes('not found');
+      const statusCode = is404 ? 404 : (err.status || 500);
+      const errorMessage = is404
+        ? `Model not found: The requested AI model (${DEFAULT_MODEL}) is unavailable. Please verify model configuration.`
+        : (err.message || 'Error reading text');
+      res.status(statusCode).json({ error: errorMessage });
+    }
+  });
+
+  // Camera test frame analysis endpoint with custom task prompt
+  app.post('/api/gemini/analyze-frame', async (req, res) => {
+    try {
+      const { imageBase64, mimeType = 'image/jpeg', prompt = 'Identify the object and describe it' } = req.body;
+      if (!imageBase64) {
+        return res.status(400).json({ error: 'imageBase64 is required' });
+      }
+
+      const client = aiClient || (req.headers['x-gemini-key'] ? new GoogleGenAI({
+        apiKey: String(req.headers['x-gemini-key']),
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+      }) : null);
+
+      if (!client) {
+        return res.status(503).json({
+          error: 'Gemini API key is missing. Please configure GEMINI_API_KEY in your environment or Settings.',
+          missingKey: true,
+        });
+      }
+
+      const systemInstruction =
+        'You are an intelligent vision assistant for the VISION_AI application. Answer the user prompt directly, concisely, and factually based on the provided camera image. In 2 to 4 sentences, describe the key objects, actions, text, or scene elements.';
+
+      const result = await generateWithModelFallback(client, {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType, data: imageBase64 } },
+              { text: prompt },
+            ],
+          },
+        ],
+        config: {
+          systemInstruction,
+          temperature: 0.3,
+        },
+      });
+
+      res.json({
+        result: result.text || 'No description generated.',
+        model: result.usedModel || DEFAULT_MODEL,
+        isFallback: result.isFallback || false,
+      });
+    } catch (err: any) {
+      console.error('Server error in /api/gemini/analyze-frame:', err);
+      const is404 =
+        err?.status === 404 ||
+        String(err?.message || '').includes('404') ||
+        String(err?.message || '').toLowerCase().includes('not found');
+      const statusCode = is404 ? 404 : (err.status || (String(err.message).includes('429') ? 429 : 500));
+      const errorMessage = is404
+        ? `Model not found: The requested AI model (${DEFAULT_MODEL}) is unavailable. Please verify model configuration.`
+        : (err.message || 'Error analyzing camera frame');
+      res.status(statusCode).json({ error: errorMessage });
     }
   });
 
@@ -217,14 +357,15 @@ Respond ONLY with a JSON object adhering to this schema:
       }) : null);
 
       if (!client) {
-        return res.status(503).json({ error: 'No Gemini key available' });
+        return res.status(503).json({
+          error: 'Gemini API key is missing. Please configure GEMINI_API_KEY in your environment or Settings.',
+          missingKey: true,
+        });
       }
 
-      const modelName = process.env.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
       const systemInstruction = 'You are VISION_AI, a concise voice assistant for a blind person. Give clear answers in at most 2 sentences in the same language the user spoke. Current device time: ' + (context.deviceTime || new Date().toISOString());
 
-      const result = await client.models.generateContent({
-        model: modelName,
+      const result = await generateWithModelFallback(client, {
         contents: question,
         config: {
           systemInstruction,
@@ -235,10 +376,19 @@ Respond ONLY with a JSON object adhering to this schema:
       res.json({ reply: result.text || 'I am ready to help.' });
     } catch (err: any) {
       console.error('Server error in /api/gemini/general-question:', err);
-      const status = err.status || (String(err.message).includes('429') ? 429 : 500);
-      res.status(status).json({ error: err.message || 'Error answering question' });
+      const is404 =
+        err?.status === 404 ||
+        String(err?.message || '').includes('404') ||
+        String(err?.message || '').toLowerCase().includes('not found');
+      const statusCode = is404 ? 404 : (err.status || (String(err.message).includes('429') ? 429 : 500));
+      const errorMessage = is404
+        ? `Model not found: The requested AI model (${DEFAULT_MODEL}) is unavailable. Please verify model configuration.`
+        : (err.message || 'Error answering question');
+      res.status(statusCode).json({ error: errorMessage });
     }
   });
+
+  const server = http.createServer(app);
 
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve(__dirname, 'dist')));
@@ -246,14 +396,34 @@ Respond ONLY with a JSON object adhering to this schema:
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
+    // Graceful WebSocket handler for Vite client in dev mode
+    // Prevents "WebSocket closed without opened" errors when HMR is disabled in iframe environments
+    const wss = new WebSocketServer({ server });
+    wss.on('error', () => {});
+    wss.on('connection', (ws: any) => {
+      ws.on('error', () => {});
+      if (ws.protocol === 'vite-ping') {
+        // ping requests open and immediately close from client side
+        return;
+      }
+      try {
+        ws.send(JSON.stringify({ type: 'connected' }));
+      } catch {
+        // ignore write errors if socket closed early
+      }
+    });
+
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`VISION_AI server listening on http://0.0.0.0:${PORT}`);
   });
 }

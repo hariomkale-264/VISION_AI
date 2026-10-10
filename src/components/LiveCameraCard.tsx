@@ -61,15 +61,21 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
 
   const liveDetections = useStatsStore((s) => s.liveDetections);
   const addActivity = useStatsStore((s) => s.addActivity);
+  const modelLoadError = useAppStore((s) => s.modelLoadError);
+  const setModelLoadError = useAppStore((s) => s.setModelLoadError);
 
   const [showSettings, setShowSettings] = useState(false);
   const [isDescribing, setIsDescribing] = useState(false);
   const [isReadingText, setIsReadingText] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const handleDescribeClick = async () => {
+    setApiError(null);
     const base64 = captureSnapshot();
     if (!base64) {
-      speechQueue.speak('Please turn on the camera first to describe the scene.', SpeechPriority.STATUS);
+      const msg = 'Please turn on the camera first to describe the scene.';
+      speechQueue.speak(msg, SpeechPriority.STATUS);
+      setApiError(msg);
       return;
     }
 
@@ -79,6 +85,7 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
     try {
       const desc = await describeSurroundings(base64);
       setLastSceneDescription(desc);
+      setApiError(null);
       speechQueue.speak(desc, SpeechPriority.ASSISTANT_REPLY);
       addActivity({
         type: 'detection',
@@ -86,9 +93,10 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
         detail: desc,
         status: 'Completed',
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Scene description error:', err);
       const { spoken } = formatSpecificError(err);
+      setApiError(spoken || 'Failed to describe scene.');
       speechQueue.speak(spoken, SpeechPriority.ASSISTANT_REPLY);
     } finally {
       setIsDescribing(false);
@@ -96,9 +104,12 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
   };
 
   const handleReadTextClick = async () => {
+    setApiError(null);
     const base64 = captureSnapshot();
     if (!base64) {
-      speechQueue.speak('Please turn on the camera first to read text.', SpeechPriority.STATUS);
+      const msg = 'Please turn on the camera first to read text.';
+      speechQueue.speak(msg, SpeechPriority.STATUS);
+      setApiError(msg);
       return;
     }
 
@@ -108,6 +119,7 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
     try {
       const text = await readTextFromImage(base64);
       setLastOcrText(text);
+      setApiError(null);
       speechQueue.speak(text, SpeechPriority.ASSISTANT_REPLY);
       addActivity({
         type: 'detection',
@@ -115,9 +127,10 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
         detail: text,
         status: 'Completed',
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Read text error:', err);
       const { spoken } = formatSpecificError(err);
+      setApiError(spoken || 'Failed to read text.');
       speechQueue.speak(spoken, SpeechPriority.ASSISTANT_REPLY);
     } finally {
       setIsReadingText(false);
@@ -340,7 +353,7 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
         {/* Real-time Bounding Box Canvas Overlay */}
         <canvas
           ref={canvasRef}
-          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+          className="absolute inset-0 w-full h-full pointer-events-none"
         />
 
         {/* Model Loading State */}
@@ -354,8 +367,26 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
           </div>
         )}
 
+        {/* Model Load Error State */}
+        {modelLoadError && !isModelLoading && (
+          <div className="absolute inset-0 z-25 bg-amber-950/90 flex flex-col items-center justify-center gap-3 text-white p-6 text-center">
+            <AlertCircle className="w-10 h-10 text-amber-400" />
+            <p className="font-bold text-base sm:text-lg">Vision Model Load Issue</p>
+            <p className="text-xs sm:text-sm opacity-85 max-w-md">{modelLoadError}</p>
+            <button
+              onClick={() => {
+                setModelLoadError(null);
+                onStartDetection();
+              }}
+              className="mt-2 px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 font-bold text-xs sm:text-sm cursor-pointer shadow-md"
+            >
+              Retry Loading Model
+            </button>
+          </div>
+        )}
+
         {/* Standby State when Detection is Inactive */}
-        {!detectionActive && !isModelLoading && (
+        {!detectionActive && !isModelLoading && !modelLoadError && (
           <div className="absolute inset-0 z-10 bg-black/70 backdrop-blur-[3px] flex flex-col items-center justify-center gap-4 text-white p-6 sm:p-10 text-center select-none">
             <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/10 flex items-center justify-center shadow-lg backdrop-blur-sm border border-white/20">
               <EyeOff className="w-8 h-8 sm:w-10 sm:h-10 text-gray-200" />
@@ -383,7 +414,15 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
         {cameraError && (
           <div className="absolute inset-0 z-30 bg-red-950/90 flex flex-col items-center justify-center gap-3 text-white p-6 text-center">
             <AlertCircle className="w-10 h-10 text-red-400" />
-            <p className="font-bold text-base sm:text-lg">Camera Permission Denied</p>
+            <p className="font-bold text-base sm:text-lg">
+              {cameraError.includes('denied')
+                ? 'Camera Permission Denied'
+                : cameraError.includes('busy') || cameraError.includes('in use')
+                ? 'Camera In Use'
+                : cameraError.includes('No camera')
+                ? 'No Camera Found'
+                : 'Camera Unavailable'}
+            </p>
             <p className="text-xs sm:text-sm opacity-80 max-w-md">{cameraError}</p>
           </div>
         )}
@@ -416,6 +455,29 @@ export const LiveCameraCard: React.FC<LiveCameraCardProps> = ({
           </div>
         )}
       </div>
+
+      {/* API / Vision Error Alert */}
+      {apiError && (
+        <div
+          className={`mt-4 p-4 rounded-2xl sm:rounded-3xl border flex items-start gap-3 text-xs sm:text-sm ${
+            highContrast
+              ? 'bg-zinc-900 border-red-500 text-red-300'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <span className="font-bold block">Vision Processing Alert</span>
+            <p className="mt-0.5 opacity-90">{apiError}</p>
+          </div>
+          <button
+            onClick={() => setApiError(null)}
+            className="text-xs font-bold underline opacity-70 hover:opacity-100 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Last Scene Description Card */}
       {lastSceneDescription && (

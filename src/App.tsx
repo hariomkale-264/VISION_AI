@@ -17,8 +17,11 @@ import { registerLocalCommandProviders } from './services/localCommandRouter';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { LiveStatusStrip } from './components/LiveStatusStrip';
+import { GoogleMapsNavBanner } from './components/GoogleMapsNavBanner';
+import { TapMapsOverlay } from './components/TapMapsOverlay';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OnboardingModal } from './components/OnboardingModal';
+import { speechQueue, SpeechPriority } from './services/speechQueue';
 import { DashboardPage } from './pages/DashboardPage';
 import { DetectionPage } from './pages/DetectionPage';
 import { NavigationPage } from './pages/NavigationPage';
@@ -86,6 +89,58 @@ export default function App() {
     startMicrophone();
   };
 
+  // Requirement 6: Keep voice session alive & handle returning from Google Maps
+  useEffect(() => {
+    const handleReturnFromMaps = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        const hasLeft = localStorage.getItem('vision_ai_has_left_for_maps');
+        if (hasLeft === 'true') {
+          localStorage.removeItem('vision_ai_has_left_for_maps');
+
+          const lastNavStr = localStorage.getItem('vision_ai_last_maps_nav');
+          if (lastNavStr) {
+            try {
+              const navData = JSON.parse(lastNavStr);
+              useAppStore.getState().setGoogleMapsNav({
+                ...navData,
+                status: 'active',
+              });
+
+              if (navData.heardText || navData.destination) {
+                useAppStore.getState().setNavDebugInfo({
+                  heardText: navData.heardText || navData.destination,
+                  extractedDest: navData.destination,
+                  geocodedPlace: navData.geocodedName || navData.destination,
+                  finalUrl: navData.url,
+                  redirectMethod: navData.redirectMethod || 'href / anchor',
+                  timestamp: navData.timestamp || Date.now(),
+                });
+              }
+            } catch (e) {
+              console.warn('Error restoring navData:', e);
+            }
+          }
+
+          useAppStore.getState().setActiveTab('navigation');
+          useAppStore.getState().setTapOverlay(null);
+          speechQueue.speak('Welcome back', SpeechPriority.NAVIGATION);
+
+          // Restart / keep microphone session alive
+          startMicrophone();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleReturnFromMaps);
+    window.addEventListener('focus', handleReturnFromMaps);
+    handleReturnFromMaps();
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleReturnFromMaps);
+      window.removeEventListener('focus', handleReturnFromMaps);
+    };
+  }, [startMicrophone]);
+
   const commonPageProps = {
     videoRef,
     canvasRef,
@@ -117,6 +172,9 @@ export default function App() {
       {/* Offline Toast Indicator */}
       <OfflineIndicator />
 
+      {/* Tap Target Overlay for Blocked Redirects Fallback */}
+      <TapMapsOverlay />
+
       {/* First-launch Guided Spoken Onboarding Modal */}
       {showOnboarding && (
         <OnboardingModal onComplete={handleOnboardingComplete} />
@@ -140,6 +198,9 @@ export default function App() {
 
           {/* Live Status Strip */}
           <LiveStatusStrip />
+
+          {/* Turn-by-Turn Google Maps Navigation Banner / Fallback */}
+          <GoogleMapsNavBanner />
 
           {/* Scrollable Viewport Stage */}
           <main className="flex-1 p-2.5 sm:p-5 lg:p-7 overflow-y-auto" role="main">

@@ -20,6 +20,7 @@ import { getWalkingRoute } from '../services/routing';
 import { formatDistance } from '../utils/haversine';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
 import { useStatsStore } from '../store/statsStore';
+import { openGoogleMaps } from '../services/navigationService';
 
 interface TopBarProps {
   onToggleMic: () => void;
@@ -40,51 +41,16 @@ export const TopBar: React.FC<TopBarProps> = ({ onToggleMic }) => {
 
   const handleSearchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
-
-    if (currentLocation.lat == null || currentLocation.lng == null) {
-      speechQueue.speak('Please wait for GPS location before searching.', SpeechPriority.ASSISTANT_REPLY);
-      return;
-    }
+    const query = searchQuery.trim();
+    if (!query) return;
 
     setIsSearching(true);
-    speechQueue.speak(`Searching destination: ${searchQuery}`, SpeechPriority.STATUS);
+    setSearchQuery('');
 
     try {
-      const matches = await searchDestination(searchQuery, currentLocation.lat, currentLocation.lng);
-      if (matches.length === 0) {
-        speechQueue.speak('No matching places found. Try another search term.', SpeechPriority.ASSISTANT_REPLY);
-      } else {
-        const best = matches[0];
-        const route = await getWalkingRoute(currentLocation.lat, currentLocation.lng, best.lat, best.lng);
-
-        startNavigation(
-          best.name,
-          [best.lat, best.lng],
-          route.coordinates,
-          route.steps,
-          route.distanceMeters,
-          route.durationSeconds
-        );
-
-        speechQueue.speak(
-          `Navigating to ${best.name}. ${route.steps[0]?.instruction || ''}`,
-          SpeechPriority.NAVIGATION
-        );
-
-        recordVoiceCommandSuccess('navigate', `Searched: ${best.name}`);
-        addActivity({
-          type: 'navigation',
-          title: `Route to ${best.name}`,
-          detail: `${formatDistance(route.distanceMeters)}, ~${Math.ceil(route.durationSeconds / 60)} min walk`,
-          status: 'Completed',
-        });
-        setSearchQuery('');
-        setActiveTab('navigation');
-      }
+      await openGoogleMaps(query, { heardText: query });
     } catch (err) {
-      console.error('Search navigation error:', err);
-      speechQueue.speak('Failed to calculate route to destination.', SpeechPriority.ASSISTANT_REPLY);
+      console.error('TopBar search openGoogleMaps error:', err);
     } finally {
       setIsSearching(false);
     }

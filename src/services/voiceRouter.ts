@@ -9,6 +9,7 @@ import { speechQueue, SpeechPriority } from './speechQueue';
 import { handleEmergencySos } from './intentRouter';
 import { describeSurroundings, readTextFromImage } from './gemini';
 import { getApiKey, notifyApiKeyMissing } from './apiKey';
+import { openGoogleMaps, handleTravelModeAnswer } from './navigationService';
 
 // Snapshot getter and mic controllers registered by components
 let snapshotProvider: (() => string | null) | null = null;
@@ -82,9 +83,9 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'नेव्हिगेशन उघडत आहे',
     },
     keywords: {
-      en: ['navigation', 'navigate', 'map', 'route', 'directions'],
-      hi: ['नेविगेशन', 'रास्ता'],
-      mr: ['नकाशा', 'मार्ग'],
+      en: ['open navigation', 'show navigation', 'navigation tab', 'navigation screen', 'open map', 'show map', 'map tab', 'view map', 'navigation', 'map'],
+      hi: ['नेविगेशन खोलें', 'रास्ता दिखाओ', 'नेविगेशन'],
+      mr: ['नकाशा उघडा', 'मार्ग दाखवा', 'नकाशा'],
     },
   },
   {
@@ -179,6 +180,223 @@ function matchesAnyKeyword(cleanedText: string, keywords: string[]): boolean {
   return keywords.some((kw) => matchesForgivingPattern(cleanedText, kw));
 }
 
+export interface NavigationIntentParse {
+  isNavIntent: boolean;
+  destination: string;
+  origin?: string;
+  travelmode: 'walking' | 'driving' | 'transit' | 'bicycling';
+  isEmpty: boolean;
+}
+
+/**
+ * FIX 1: Strips tab/screen/page/section/window words and checks if speech matches a tab keyword.
+ * Requirement:
+ * - Before checking for navigation, remove the words "tab", "screen", "page", "section", "window",
+ *   and the Hindi/Marathi equivalents (टैब, स्क्रीन, पेज, विभाग) from the sentence.
+ * - Then check whether the remaining text matches a tab keyword
+ *   (dashboard, detection, navigation, voice, emergency, settings and their Hindi/Marathi versions).
+ * - If yes, switch the tab. Only treat the sentence as a destination if it does NOT match any tab.
+ * - "go to the voice tab", "open settings page", "show the detection screen" must switch tabs and never open Google Maps.
+ */
+export function matchTabFromSpeech(rawText: string): { isTab: boolean; tab?: ActiveTab; confirmation?: string } {
+  if (!rawText) return { isTab: false };
+
+  // 1. Remove words: "tab", "screen", "page", "section", "window", and Hindi/Marathi equivalents (टैब, स्क्रीन, पेज, विभाग)
+  const tabFilterRegex = /\b(tab|tabs|screen|screens|page|pages|section|sections|window|windows)\b|टैब|स्क्रीन|पेज|विभाग/gi;
+  const filtered = rawText.replace(tabFilterRegex, ' ').replace(/\s+/g, ' ').trim();
+
+  // Normalize
+  const cleanedFiltered = cleanSpokenText(filtered);
+  if (!cleanedFiltered) return { isTab: false };
+
+  // Guard against explicit action commands like "start detection" or "stop navigation"
+  const isStartStopAction =
+    cleanedFiltered.startsWith('start ') ||
+    cleanedFiltered.startsWith('stop ') ||
+    cleanedFiltered.startsWith('turn on') ||
+    cleanedFiltered.startsWith('turn off') ||
+    cleanedFiltered.includes('start detection') ||
+    cleanedFiltered.includes('stop detection') ||
+    cleanedFiltered.includes('start navigation') ||
+    cleanedFiltered.includes('stop navigation') ||
+    cleanedFiltered.includes('start listening') ||
+    cleanedFiltered.includes('stop listening');
+
+  if (isStartStopAction) {
+    return { isTab: false };
+  }
+
+  // 2. Strip leading navigation/action prefixes: "go to the", "go to", "open", "show", "switch to", "take me to", etc.
+  const leadingPrefixes =
+    /^(?:please\s+|can\s+you\s+|could\s+you\s+|i\s+want\s+to\s+see\s+|open\s+the\s+|open\s+|show\s+the\s+|show\s+|go\s+to\s+the\s+|go\s+to\s+|switch\s+to\s+the\s+|switch\s+to\s+|take\s+me\s+to\s+the\s+|take\s+me\s+to\s+|move\s+to\s+the\s+|move\s+to\s+|view\s+the\s+|view\s+|navigate\s+to\s+the\s+|navigate\s+to\s+|चलो\s+|खोलो\s+|उघड\s+|जा\s+|दाखवा\s+|बघा\s+)/i;
+  const stripped = cleanedFiltered.replace(leadingPrefixes, '').trim();
+
+  const app = useAppStore.getState();
+  const currentLang = app.language || 'en-US';
+
+  for (const route of TAB_ROUTES) {
+    let matchedLang: 'en' | 'hi' | 'mr' | null = null;
+
+    const testMatch = (kw: string) => {
+      const cleanKw = cleanSpokenText(kw);
+      if (!cleanKw) return false;
+      if (stripped === cleanKw || cleanedFiltered === cleanKw) return true;
+      const strippedWords = stripped.split(' ');
+      if (strippedWords.length <= 2 && strippedWords.includes(cleanKw)) return true;
+      return false;
+    };
+
+    for (const kw of route.keywords.en) {
+      if (testMatch(kw)) {
+        matchedLang = 'en';
+        break;
+      }
+    }
+    if (!matchedLang) {
+      for (const kw of route.keywords.hi) {
+        if (testMatch(kw)) {
+          matchedLang = 'hi';
+          break;
+        }
+      }
+    }
+    if (!matchedLang) {
+      for (const kw of route.keywords.mr) {
+        if (testMatch(kw)) {
+          matchedLang = 'mr';
+          break;
+        }
+      }
+    }
+
+    if (matchedLang) {
+      const confirmation = getLocalizedConfirmation(route.confirmations, matchedLang, currentLang);
+      return { isTab: true, tab: route.tab, confirmation };
+    }
+  }
+
+  return { isTab: false };
+}
+
+/**
+ * Extracts destination, origin, and travelmode from user speech.
+ * Detects phrases like: "navigate to X", "take me to X", "go to X", "I want to go to X",
+ * "directions to X", "from A to B", "drive to X", "by bus to X", etc.
+ */
+export function parseNavigationIntent(rawText: string): NavigationIntentParse {
+  const text = (rawText || '').trim();
+  if (!text) return { isNavIntent: false, destination: '', travelmode: 'walking', isEmpty: false };
+
+  // Normalized lowercase text without punctuation
+  const lower = text
+    .toLowerCase()
+    .replace(/[.,?!;:()"'“”]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Detect spoken travelmode
+  let travelmode: 'walking' | 'driving' | 'transit' | 'bicycling' = 'walking';
+  if (/\b(drive|driving|by car|in a car|cab|taxi)\b/i.test(lower)) {
+    travelmode = 'driving';
+  } else if (/\b(transit|bus|by bus|train|by train|metro|by metro|public transport|subway)\b/i.test(lower)) {
+    travelmode = 'transit';
+  } else if (/\b(bicycle|bicycling|by bicycle|bike|by bike|cycle|by cycle)\b/i.test(lower)) {
+    travelmode = 'bicycling';
+  } else if (/\b(walk|walking|by foot|on foot)\b/i.test(lower)) {
+    travelmode = 'walking';
+  }
+
+  // Check explicit origin "from A to B"
+  let origin: string | undefined;
+  const fromToMatch = lower.match(/(?:from)\s+(.+?)\s+(?:to)\s+(.+)$/i);
+  if (fromToMatch) {
+    origin = fromToMatch[1].trim();
+    let dest = fromToMatch[2].trim();
+    dest = dest.replace(/^(?:please|the|nearest|a|an)\s+/i, '').trim();
+    return {
+      isNavIntent: true,
+      origin,
+      destination: dest,
+      travelmode,
+      isEmpty: !dest,
+    };
+  }
+
+  // List of triggers in descending priority
+  const triggerPatterns: RegExp[] = [
+    /^(?:please\s+)?(?:i\s+want\s+to\s+go\s+to|i\s+need\s+to\s+go\s+to|i\s+wanna\s+go\s+to|want\s+to\s+go\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:how\s+do\s+i\s+get\s+to|how\s+to\s+get\s+to|how\s+can\s+i\s+reach|how\s+do\s+i\s+reach)\s*(.*)$/i,
+    /^(?:please\s+)?(?:take\s+me\s+to|take\s+us\s+to|bring\s+me\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:navigate\s+to|navigation\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:directions\s+to|direction\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:route\s+to|routes\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:drive\s+to|drive\s+me\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:walk\s+to|walk\s+me\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:by\s+bus\s+to|by\s+train\s+to|by\s+car\s+to|by\s+bike\s+to|by\s+cycle\s+to)\s*(.*)$/i,
+    /^(?:please\s+)?(?:go\s+to|head\s+to|travel\s+to)\s*(.*)$/i,
+    // Hindi/Marathi patterns
+    /^(?:कृपया\s+)?(?:मुझे\s+)?(.+?)\s*(?:ले\s+चलो|जाना\s+है|का\s+रास्ता|का\s+मार्ग)$/i,
+    /^(?:कृपया\s+)?(?:मला\s+)?(.+?)\s*(?:ला\s+जायचं\s+आहे|कडे\s+जा|चा\s+मार्ग)$/i,
+  ];
+
+  let isMatch = false;
+  let rawDest = '';
+
+  for (const pattern of triggerPatterns) {
+    const match = lower.match(pattern);
+    if (match) {
+      isMatch = true;
+      rawDest = match[1] || '';
+      break;
+    }
+  }
+
+  // Check standalone trigger without destination
+  if (!isMatch) {
+    if (
+      /^(?:please\s+)?(?:navigate|directions|take me|i want to go|how do i get there)$/i.test(lower)
+    ) {
+      return { isNavIntent: true, destination: '', travelmode, isEmpty: true };
+    }
+    return { isNavIntent: false, destination: '', travelmode: 'walking', isEmpty: false };
+  }
+
+  // Strip trailing mode phrases if spoken at the end (e.g. "central park by bus" -> "central park")
+  let cleaned = rawDest
+    .replace(/\s*(?:by\s+bus|by\s+train|by\s+car|by\s+walking|on\s+foot|by\s+bike|by\s+cycle|by\s+metro|driving|walking)\s*$/i, '')
+    .trim();
+
+  // Strip filler words: "please", "the", "nearest", "a", "an" ONLY when they are LEADING words
+  let changed = true;
+  while (changed) {
+    const prev = cleaned;
+    cleaned = cleaned.replace(/^(?:please|the|nearest|a|an)\s+/i, '').trim();
+    changed = prev !== cleaned;
+  }
+
+  cleaned = cleaned.replace(/[.,?!]+$/, '').trim();
+
+  if (!cleaned) {
+    return { isNavIntent: true, destination: '', travelmode, isEmpty: true };
+  }
+
+  return {
+    isNavIntent: true,
+    destination: cleaned,
+    origin,
+    travelmode,
+    isEmpty: false,
+  };
+}
+
+/**
+ * Builds standard Google Maps turn-by-turn navigation URL with origin defaulted to user's current GPS.
+ */
+export function buildGoogleMapsUrl(destination: string, travelmode: string = 'walking'): string {
+  const encDest = encodeURIComponent(destination.trim());
+  return `https://www.google.com/maps/dir/?api=1&destination=${encDest}&travelmode=${travelmode}`;
+}
+
 /**
  * Selects confirmation language based on current app language setting or script
  */
@@ -205,8 +423,50 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
   const currentLang = app.language || 'en-US';
 
   // -----------------------------------------------------------------
-  // 1. TAB SWITCHING (Priority: match before general actions)
+  // 0. TRAVEL MODE ANSWER (If user was prompted "Say walk, drive, or transit")
   // -----------------------------------------------------------------
+  if (app.isWaitingForTravelMode) {
+    const answered = handleTravelModeAnswer(rawText);
+    if (answered) {
+      return {
+        matched: true,
+        commandName: 'travel_mode_answer',
+        spokenReply: 'Travel mode selected',
+      };
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // 1. TAB SWITCHING (FIX 1: Checked BEFORE Navigation!)
+  // Requirement:
+  // - Before checking for navigation, remove the words "tab", "screen", "page",
+  //   "section", "window", and the Hindi/Marathi equivalents (टैब, स्क्रीन, पेज, विभाग) from the sentence.
+  // - Then check whether the remaining text matches a tab keyword
+  //   (dashboard, detection, navigation, voice, emergency, settings and their Hindi/Marathi versions).
+  // - If yes, switch the tab. Only treat the sentence as a destination if it does NOT match any tab.
+  // - "go to the voice tab", "open settings page", "show the detection screen" must switch tabs and never open Google Maps.
+  // -----------------------------------------------------------------
+  const tabCheck = matchTabFromSpeech(rawText);
+  if (tabCheck.isTab && tabCheck.tab) {
+    app.setActiveTab(tabCheck.tab);
+    if (tabCheck.confirmation) {
+      if (tabCheck.tab === 'emergency') {
+        handleEmergencySos();
+        speechQueue.speak(tabCheck.confirmation, SpeechPriority.URGENT_OBSTACLE);
+      } else {
+        speechQueue.speak(tabCheck.confirmation, SpeechPriority.NAVIGATION);
+      }
+    }
+    app.setLastTranscript(rawText.trim());
+    stats.recordVoiceCommandSuccess(`switch to ${tabCheck.tab}`, tabCheck.confirmation || `Switched to ${tabCheck.tab}`);
+    return {
+      matched: true,
+      commandName: `switch_to_${tabCheck.tab}`,
+      spokenReply: tabCheck.confirmation,
+    };
+  }
+
+  // Also check standard TAB_ROUTES for direct keyword matches
   for (const route of TAB_ROUTES) {
     let matchedLang: 'en' | 'hi' | 'mr' | null = null;
 
@@ -219,7 +479,6 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
     }
 
     if (matchedLang) {
-      // Guard against false positives like "start detection" or "stop navigation"
       const isStartStopAction =
         cleaned.startsWith('start ') ||
         cleaned.startsWith('stop ') ||
@@ -246,6 +505,65 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
         return { matched: true, commandName: route.tab, spokenReply: confirmation };
       }
     }
+  }
+
+  // -----------------------------------------------------------------
+  // 2. NAVIGATION DESTINATION INTENT (Only treated as destination if it does NOT match any tab!)
+  // -----------------------------------------------------------------
+
+  // If user was previously asked "Where do you want to go?"
+  if (app.isPendingDestination) {
+    app.setIsPendingDestination(false);
+    let pendingDest = cleanSpokenText(rawText);
+    let changed = true;
+    while (changed) {
+      const prev = pendingDest;
+      pendingDest = pendingDest.replace(/^(?:please|the|nearest|a|an)\s+/i, '').trim();
+      changed = prev !== pendingDest;
+    }
+    pendingDest = pendingDest.replace(/[.,?!]+$/, '').trim();
+
+    if (pendingDest.length > 0) {
+      await openGoogleMaps(pendingDest, { heardText: rawText.trim() });
+      return {
+        matched: true,
+        commandName: 'navigate_destination',
+        spokenReply: `Opening Google Maps to ${pendingDest}`,
+      };
+    }
+  }
+
+  // Parse navigation intent from current transcript
+  const navParsed = parseNavigationIntent(rawText);
+  if (navParsed.isNavIntent) {
+    if (navParsed.isEmpty || !navParsed.destination) {
+      app.setIsPendingDestination(true);
+      const askText = 'Where do you want to go?';
+      speechQueue.speak(askText, SpeechPriority.ASSISTANT_REPLY);
+      app.setLastTranscript(rawText.trim());
+      stats.recordVoiceCommandSuccess(rawText.trim() || 'navigate', askText);
+      return {
+        matched: true,
+        commandName: 'navigate_ask',
+        spokenReply: askText,
+      };
+    }
+
+    const dest = navParsed.destination;
+    const travelmode = navParsed.travelmode;
+
+    // Use openGoogleMaps everywhere (never window.open)
+    await openGoogleMaps(dest, {
+      explicitMode: travelmode,
+      origin: navParsed.origin,
+      heardText: rawText.trim(),
+    });
+
+    return {
+      matched: true,
+      commandName: 'navigate_destination',
+      spokenReply: `Opening Google Maps to ${dest}`,
+    };
   }
 
   // -----------------------------------------------------------------

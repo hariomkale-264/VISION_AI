@@ -21,17 +21,26 @@ export function useCamera() {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
 
-      // Rear camera constraint with environment fallback
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      };
+      // Try environment (rear) camera first, with automatic fallback for laptop webcams
+      let stream: MediaStream;
+      try {
+        const constraints: MediaStreamConstraints = {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (firstErr) {
+        // Fallback for laptops/desktops or devices without rear cameras
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+      }
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
 
       if (videoRef.current) {
@@ -49,7 +58,17 @@ export function useCamera() {
       }
     } catch (err: any) {
       console.warn('Camera access error:', err);
-      setCameraError(err.message || 'Unable to access rear camera');
+      let errMsg = 'Unable to access camera.';
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        errMsg = 'Camera permission denied. Please allow camera access in your browser settings.';
+      } else if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
+        errMsg = 'No camera found on this device.';
+      } else if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
+        errMsg = 'Camera is in use by another application or hardware is busy.';
+      } else if (err?.message) {
+        errMsg = err.message;
+      }
+      setCameraError(errMsg);
       setIsCameraReady(false);
     }
   }, [setVideoResolution]);
@@ -66,7 +85,7 @@ export function useCamera() {
   }, []);
 
   /**
-   * Generates a JPEG base64 snapshot (max 1024px wide) for Gemini Vision.
+   * Generates a JPEG base64 snapshot (~640px wide) for Gemini Vision.
    */
   const captureSnapshot = useCallback((): string | null => {
     const video = videoRef.current;
@@ -74,10 +93,10 @@ export function useCamera() {
       return null;
     }
 
-    const maxDim = 1024;
-    const scale = Math.min(1, maxDim / Math.max(video.videoWidth, video.videoHeight));
-    const targetW = Math.round(video.videoWidth * scale);
-    const targetH = Math.round(video.videoHeight * scale);
+    // Sensible processing size (~640px wide)
+    const targetW = 640;
+    const aspect = video.videoHeight / video.videoWidth;
+    const targetH = Math.round(targetW * aspect);
 
     const offscreen = document.createElement('canvas');
     offscreen.width = targetW;

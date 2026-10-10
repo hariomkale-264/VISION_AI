@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Search, MapPin, CornerUpRight, ArrowRight } from 'lucide-react';
+import { Search, MapPin, CornerUpRight, ArrowRight, ExternalLink, Navigation, Compass } from 'lucide-react';
 import { NavigationCard } from '../components/NavigationCard';
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
@@ -12,6 +12,7 @@ import { searchDestination } from '../services/geocode';
 import { getWalkingRoute } from '../services/routing';
 import { formatDistance } from '../utils/haversine';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
+import { openGoogleMaps } from '../services/navigationService';
 
 export const NavigationPage: React.FC = () => {
   const currentLocation = useAppStore((s) => s.currentLocation);
@@ -21,6 +22,8 @@ export const NavigationPage: React.FC = () => {
   const routeSteps = useAppStore((s) => s.routeSteps);
   const currentStepIndex = useAppStore((s) => s.currentStepIndex);
   const highContrast = useAppStore((s) => s.highContrast);
+  const googleMapsNav = useAppStore((s) => s.googleMapsNav);
+  const navDebugInfo = useAppStore((s) => s.navDebugInfo);
 
   const recordVoiceCommandSuccess = useStatsStore((s) => s.recordVoiceCommandSuccess);
   const addActivity = useStatsStore((s) => s.addActivity);
@@ -30,52 +33,29 @@ export const NavigationPage: React.FC = () => {
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
-
-    if (currentLocation.lat == null || currentLocation.lng == null) {
-      speechQueue.speak('Waiting for GPS signal before route search.', SpeechPriority.STATUS);
-      return;
-    }
+    const dest = query.trim();
+    if (!dest) return;
 
     setIsSearching(true);
-    speechQueue.speak(`Searching destination: ${query}`, SpeechPriority.STATUS);
+    setQuery('');
 
+    // Trigger openGoogleMaps everywhere (search bar, voice, buttons)
     try {
-      const matches = await searchDestination(query, currentLocation.lat, currentLocation.lng);
-      if (matches.length === 0) {
-        speechQueue.speak('No matching places found nearby.', SpeechPriority.ASSISTANT_REPLY);
-      } else {
-        const best = matches[0];
-        const route = await getWalkingRoute(currentLocation.lat, currentLocation.lng, best.lat, best.lng);
-
-        startNavigation(
-          best.name,
-          [best.lat, best.lng],
-          route.coordinates,
-          route.steps,
-          route.distanceMeters,
-          route.durationSeconds
-        );
-
-        speechQueue.speak(
-          `Navigating to ${best.name}. ${route.steps[0]?.instruction || ''}`,
-          SpeechPriority.NAVIGATION
-        );
-
-        recordVoiceCommandSuccess('navigate', `Route to ${best.name}`);
-        addActivity({
-          type: 'navigation',
-          title: `Route to ${best.name}`,
-          detail: `${formatDistance(route.distanceMeters)}, ~${Math.ceil(route.durationSeconds / 60)} min walk`,
-          status: 'Completed',
-        });
-        setQuery('');
-      }
+      await openGoogleMaps(dest, { heardText: dest });
     } catch (err) {
-      console.error('Navigation search error:', err);
-      speechQueue.speak('Unable to calculate walking route.', SpeechPriority.ASSISTANT_REPLY);
+      console.error('openGoogleMaps error:', err);
     } finally {
       setIsSearching(false);
+    }
+  };
+
+  const handleReopenMaps = () => {
+    if (googleMapsNav?.destination) {
+      openGoogleMaps(googleMapsNav.destination, {
+        explicitMode: googleMapsNav.travelmode,
+        bypassModePrompt: true,
+        heardText: googleMapsNav.heardTranscript || googleMapsNav.destination,
+      });
     }
   };
 
@@ -84,7 +64,7 @@ export const NavigationPage: React.FC = () => {
       <div>
         <h2 className="text-xl font-extrabold tracking-tight">Pedestrian GPS Navigation</h2>
         <p className="text-xs font-semibold opacity-70">
-          Turn-by-turn spoken guidance powered by OpenStreetMap & OSRM with automatic 30m rerouting.
+          Turn-by-turn guidance powered by OpenStreetMap & automatic Google Maps navigation.
         </p>
       </div>
 
@@ -102,21 +82,91 @@ export const NavigationPage: React.FC = () => {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Enter destination (e.g., Central Park, Pharmacy, Grocery)..."
+            placeholder="Enter destination (e.g., Central Park, Railway Station)..."
             aria-label="Enter destination"
             className="flex-1 bg-transparent text-sm font-semibold focus:outline-none"
           />
           <button
             type="submit"
             disabled={isSearching}
-            aria-label="Find walking route"
-            className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 transition flex items-center gap-1.5 min-h-[44px]"
+            aria-label="Find route and open Google Maps"
+            className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 transition flex items-center gap-1.5 min-h-[44px] cursor-pointer"
           >
-            <span>{isSearching ? 'Finding...' : 'Start Route'}</span>
+            <span>{isSearching ? 'Opening...' : 'Start Route'}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
       </form>
+
+      {/* Active Google Maps Navigation Status Card & Debug Line */}
+      {googleMapsNav && (
+        <div
+          className={`p-5 rounded-[24px] border transition-all ${
+            highContrast
+              ? 'bg-zinc-950 border-2 border-yellow-400 text-yellow-300'
+              : 'bg-emerald-50/90 border-emerald-200 text-emerald-950 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-100 shadow-sm'
+          }`}
+        >
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black uppercase tracking-wide bg-emerald-600 text-white dark:bg-emerald-500 dark:text-black">
+                  <span className="w-2 h-2 rounded-full bg-white dark:bg-black animate-ping" />
+                  Nav: Active
+                </span>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-700 bg-white/70 dark:bg-zinc-900 capitalize">
+                  {googleMapsNav.travelmode}
+                </span>
+                {googleMapsNav.distanceKm ? (
+                  <span className="text-xs opacity-75 font-mono">
+                    ~{googleMapsNav.distanceKm} km away
+                  </span>
+                ) : null}
+              </div>
+              <h3 className="text-lg font-black tracking-tight">
+                Destination: {googleMapsNav.destination}
+              </h3>
+              {googleMapsNav.heardTranscript && (
+                <p className="text-xs opacity-80">
+                  Heard command: &ldquo;{googleMapsNav.heardTranscript}&rdquo;
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleReopenMaps}
+              aria-label={`Re-open Google Maps for ${googleMapsNav.destination}`}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs shadow-md transition-all active:scale-[0.98] min-h-[44px] cursor-pointer ${
+                highContrast
+                  ? 'bg-yellow-400 text-black hover:bg-yellow-300'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+              }`}
+            >
+              <Navigation className="w-4 h-4" />
+              <span>Re-open Google Maps</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Prompt 7: Debug Line: heard text -> extracted destination -> geocoded place -> final URL -> redirect method used */}
+          {navDebugInfo && (
+            <div className="mt-4 pt-3 border-t border-emerald-200/60 dark:border-emerald-800/60 text-[11px] font-mono break-all space-y-1 opacity-90">
+              <span className="font-bold text-emerald-800 dark:text-emerald-300 block">
+                Navigation Pipeline Telemetry:
+              </span>
+              <div>
+                <span className="opacity-75">Heard:</span> &ldquo;{navDebugInfo.heardText}&rdquo; &rarr;{' '}
+                <span className="opacity-75">Extracted:</span> &ldquo;{navDebugInfo.extractedDest}&rdquo; &rarr;{' '}
+                <span className="opacity-75">Geocoded:</span> &ldquo;{navDebugInfo.geocodedPlace}&rdquo; &rarr;{' '}
+                <span className="opacity-75">Method:</span> <strong className="text-amber-600 dark:text-yellow-400">{navDebugInfo.redirectMethod}</strong>
+              </div>
+              <div className="text-[10px] opacity-70 truncate">
+                <span className="opacity-75">URL:</span> {navDebugInfo.finalUrl}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
@@ -131,7 +181,18 @@ export const NavigationPage: React.FC = () => {
               : 'bg-white border border-gray-100 text-gray-900'
           }`}
         >
-          <h3 className="font-extrabold text-base tracking-tight mb-2">Turn Instructions</h3>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h3 className="font-extrabold text-base tracking-tight">Turn Instructions</h3>
+            {destination && (
+              <button
+                onClick={() => openGoogleMaps(destination, { bypassModePrompt: true })}
+                className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                <span>Google Maps</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            )}
+          </div>
           <p className="text-xs font-semibold opacity-70 mb-4">
             {navigationActive ? `Path to ${destination}` : 'No active route'}
           </p>

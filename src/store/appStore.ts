@@ -17,6 +17,35 @@ export interface RouteStep {
   modifier?: string;
 }
 
+export interface GoogleMapsNavState {
+  destination: string;
+  geocodedName?: string;
+  url: string;
+  travelmode: 'walking' | 'driving' | 'transit' | 'bicycling';
+  heardTranscript: string;
+  popupBlocked?: boolean;
+  lat?: number;
+  lng?: number;
+  distanceKm?: number;
+  status?: 'active' | 'completed';
+  redirectMethod?: string;
+}
+
+export interface NavDebugInfo {
+  heardText: string;
+  extractedDest: string;
+  geocodedPlace: string;
+  finalUrl: string;
+  redirectMethod: string;
+  timestamp?: number;
+}
+
+export interface TapOverlayState {
+  active: boolean;
+  url: string;
+  destination: string;
+}
+
 export interface VoiceDebugLog {
   timestamp: string;
   durationMs: number;
@@ -69,6 +98,8 @@ interface AppState {
   setShowDetectionDebug: (val: boolean) => void;
   isModelLoading: boolean;
   setIsModelLoading: (val: boolean) => void;
+  modelLoadError: string | null;
+  setModelLoadError: (err: string | null) => void;
   fps: number;
   setFps: (fps: number) => void;
   videoResolution: { width: number; height: number };
@@ -101,6 +132,18 @@ interface AppState {
   updateNavigationProgress: (stepIndex: number, distRemaining: number, durationRemaining: number) => void;
   stopNavigation: () => void;
   setIsRerouting: (val: boolean) => void;
+
+  // External Google Maps Navigation state
+  googleMapsNav: GoogleMapsNavState | null;
+  setGoogleMapsNav: (nav: GoogleMapsNavState | null) => void;
+  autoStartTurnByTurn: boolean;
+  setAutoStartTurnByTurn: (val: boolean) => void;
+  navDebugInfo: NavDebugInfo | null;
+  setNavDebugInfo: (info: NavDebugInfo | null) => void;
+  tapOverlay: TapOverlayState | null;
+  setTapOverlay: (overlay: TapOverlayState | null) => void;
+  isWaitingForTravelMode: boolean;
+  setIsWaitingForTravelMode: (val: boolean) => void;
 
   // Real-time Information Bar Metrics
   currentTimeString: string;
@@ -202,7 +245,7 @@ export const useAppStore = create<AppState>()(
       setDetectionActive: (detectionActive) => set({ detectionActive }),
       modelType: 'mobilenet_v2',
       setModelType: (modelType) => set({ modelType }),
-      confidenceThreshold: 0.4,
+      confidenceThreshold: 0.5,
       setConfidenceThreshold: (confidenceThreshold) => set({ confidenceThreshold }),
       speakFarObjects: false,
       setSpeakFarObjects: (speakFarObjects) => set({ speakFarObjects }),
@@ -210,6 +253,8 @@ export const useAppStore = create<AppState>()(
       setShowDetectionDebug: (showDetectionDebug) => set({ showDetectionDebug }),
       isModelLoading: false,
       setIsModelLoading: (isModelLoading) => set({ isModelLoading }),
+      modelLoadError: null,
+      setModelLoadError: (modelLoadError) => set({ modelLoadError }),
       fps: 0,
       setFps: (fps) => set({ fps }),
       videoResolution: { width: 0, height: 0 },
@@ -276,6 +321,17 @@ export const useAppStore = create<AppState>()(
 
       setIsRerouting: (isRerouting) => set({ isRerouting }),
 
+      googleMapsNav: null,
+      setGoogleMapsNav: (googleMapsNav) => set({ googleMapsNav }),
+      autoStartTurnByTurn: false,
+      setAutoStartTurnByTurn: (autoStartTurnByTurn) => set({ autoStartTurnByTurn }),
+      navDebugInfo: null,
+      setNavDebugInfo: (navDebugInfo) => set({ navDebugInfo }),
+      tapOverlay: null,
+      setTapOverlay: (tapOverlay) => set({ tapOverlay }),
+      isWaitingForTravelMode: false,
+      setIsWaitingForTravelMode: (isWaitingForTravelMode) => set({ isWaitingForTravelMode }),
+
       currentTimeString: '',
       currentDateString: '',
       batteryLevel: null,
@@ -326,6 +382,7 @@ export const useAppStore = create<AppState>()(
         speakFarObjects: state.speakFarObjects,
         showDetectionDebug: state.showDetectionDebug,
         voiceDebugPanel: state.voiceDebugPanel,
+        autoStartTurnByTurn: state.autoStartTurnByTurn,
       }),
     }
   )
