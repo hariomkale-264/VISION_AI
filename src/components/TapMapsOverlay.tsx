@@ -38,7 +38,11 @@ export const TapMapsOverlay: React.FC = () => {
 
   const handleScreenTap = () => {
     // Tap is a direct user touch gesture, allowed unconditionally by all browsers
+    try {
+      window.open(tapOverlay.url, '_blank');
+    } catch {}
     performRedirect(tapOverlay.url);
+    setTapOverlay(null);
   };
 
   const handleClose = (e: React.MouseEvent) => {

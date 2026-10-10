@@ -6,7 +6,8 @@
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
 import { searchDestination, reverseGeocode } from './geocode';
-import { calculateHaversineDistance } from '../utils/haversine';
+import { calculateHaversineDistance, formatDistance } from '../utils/haversine';
+import { getWalkingRoute } from './routing';
 import { speechQueue, SpeechPriority } from './speechQueue';
 
 export interface OpenGoogleMapsOptions {
@@ -74,8 +75,18 @@ export function handleTravelModeAnswer(speech: string): boolean {
  * 2) hidden <a target="_self"> click()
  */
 export function performRedirect(mapsUrl: string): void {
+  const inIframe = typeof window !== 'undefined' && window.top !== window;
+
   try {
-    window.location.href = mapsUrl;
+    if (inIframe && window.top) {
+      try {
+        window.top.location.href = mapsUrl;
+      } catch {
+        window.location.href = mapsUrl;
+      }
+    } else {
+      window.location.href = mapsUrl;
+    }
   } catch (e) {
     console.warn('location.href redirect error:', e);
   }
@@ -86,10 +97,10 @@ export function performRedirect(mapsUrl: string): void {
       anchor = document.createElement('a');
       anchor.id = 'maps-redirect-anchor';
       anchor.style.display = 'none';
-      anchor.target = '_self';
       document.body.appendChild(anchor);
     }
     anchor.href = mapsUrl;
+    anchor.target = inIframe ? '_top' : '_self';
     anchor.click();
   } catch (e) {
     console.warn('anchor click redirect error:', e);
@@ -218,7 +229,41 @@ export async function openGoogleMaps(
   const heardText = options.heardText || query;
   let redirectMethod = 'href / anchor';
 
-  // 4. Update state & debug line
+  // 4. Calculate guidance route and start in-app navigation if location available
+  let guidanceAnnounced = false;
+  if (userLat != null && userLng != null && bestMatch?.lat != null && bestMatch?.lng != null) {
+    try {
+      const route = await getWalkingRoute(userLat, userLng, bestMatch.lat, bestMatch.lng);
+      app.startNavigation(
+        destinationDisplayName,
+        [bestMatch.lat, bestMatch.lng],
+        route.coordinates,
+        route.steps,
+        route.distanceMeters,
+        route.durationSeconds
+      );
+      app.setActiveTab('navigation');
+
+      const firstStep = route.steps[0]?.instruction || `Proceed toward ${destinationDisplayName}`;
+      const distDesc = distanceMeters ? `about ${formatDistance(distanceMeters)} away` : '';
+      speechQueue.speak(
+        `Starting guidance to ${destinationDisplayName}${distDesc ? ', ' + distDesc : ''}. ${firstStep}. Redirecting to Google Maps.`,
+        SpeechPriority.NAVIGATION
+      );
+      guidanceAnnounced = true;
+
+      stats.addActivity({
+        type: 'navigation',
+        title: `Route to ${destinationDisplayName}`,
+        detail: `${formatDistance(route.distanceMeters)}, ~${Math.ceil(route.durationSeconds / 60)} min walk`,
+        status: 'Active',
+      });
+    } catch (routeErr) {
+      console.warn('In-app routing warning:', routeErr);
+    }
+  }
+
+  // 5. Update state & debug line
   const debugLine = {
     heardText,
     extractedDest: query,
@@ -243,11 +288,12 @@ export async function openGoogleMaps(
     redirectMethod,
   });
 
-  stats.recordVoiceCommandSuccess(`navigate to ${destinationDisplayName}`, `Opening Google Maps (${chosenMode})`);
+  stats.recordVoiceCommandSuccess(`navigate to ${destinationDisplayName}`, `Starting guidance & Google Maps (${chosenMode})`);
 
-  // 5. Loading behavior:
-  // Speak "Opening Google Maps to X", vibrate 200ms, save to localStorage, wait 600ms
-  speechQueue.speak(`Opening Google Maps to ${destinationDisplayName}`, SpeechPriority.NAVIGATION);
+  // 6. Loading behavior:
+  if (!guidanceAnnounced) {
+    speechQueue.speak(`Starting guidance to ${destinationDisplayName}. Opening Google Maps.`, SpeechPriority.NAVIGATION);
+  }
 
   if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     try {

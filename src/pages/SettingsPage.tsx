@@ -22,18 +22,28 @@ import {
   Trash2,
   Sparkles,
   Navigation,
+  Cpu,
+  Server,
+  Layers,
 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
 import {
-  GEMINI_STORAGE_KEY,
-  GEMINI_DEFAULT_MODEL,
-  GEMINI_FALLBACK_MODEL,
-  getApiKey,
+  AI_PROVIDERS,
+  AIProviderId,
+  getActiveProviderId,
+  setActiveProviderId,
+  getProviderApiKey,
+  setProviderApiKey,
+  removeProviderApiKey,
+  getCustomBaseUrl,
+  setCustomBaseUrl,
+  getCustomModel,
+  setCustomModel,
   maskApiKey,
-  testApiKey,
-} from '../services/apiKey';
+} from '../services/aiProviders';
+import { testApiKey } from '../services/apiKey';
 import { CameraTestSection } from '../components/CameraTestSection';
 
 export const SettingsPage: React.FC = () => {
@@ -54,16 +64,21 @@ export const SettingsPage: React.FC = () => {
   const voiceDebugLogs = useAppStore((s) => s.voiceDebugLogs);
   const setLastErrorDebug = useAppStore((s) => s.setLastErrorDebug);
   const setKeyMissingAlert = useAppStore((s) => s.setKeyMissingAlert);
+  const activeAiProvider = useAppStore((s) => s.activeAiProvider);
+  const setActiveAiProviderStore = useAppStore((s) => s.setActiveAiProvider);
 
   const resetTodayStats = useStatsStore((s) => s.resetTodayStats);
   const strideLength = useStatsStore((s) => s.strideLength);
   const setStrideLength = useStatsStore((s) => s.setStrideLength);
 
-  // Gemini API Key State
+  // Selected Provider State
+  const [selectedProvider, setSelectedProvider] = useState<AIProviderId>(() => getActiveProviderId());
   const [inputKey, setInputKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [savedKeyMasked, setSavedKeyMasked] = useState<string>('');
-  const [hasLocalStorageKey, setHasLocalStorageKey] = useState<boolean>(false);
+  const [customBaseUrlInput, setCustomBaseUrlInput] = useState(() => getCustomBaseUrl());
+  const [customModelInput, setCustomModelInput] = useState(() => getCustomModel());
+
   const [testStatus, setTestStatus] = useState<{
     tested: boolean;
     ok: boolean;
@@ -71,50 +86,57 @@ export const SettingsPage: React.FC = () => {
   } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  // Load current saved key on mount
+  // Sync provider on mount and refresh key info
   useEffect(() => {
-    refreshKeyStatus();
-  }, []);
+    refreshKeyStatus(selectedProvider);
+  }, [selectedProvider]);
 
-  const refreshKeyStatus = () => {
-    try {
-      const stored = localStorage.getItem(GEMINI_STORAGE_KEY);
-      if (stored && stored.trim()) {
-        setSavedKeyMasked(maskApiKey(stored));
-        setHasLocalStorageKey(true);
-      } else {
-        const fallback = getApiKey();
-        if (fallback) {
-          setSavedKeyMasked(maskApiKey(fallback));
-          setHasLocalStorageKey(false);
-        } else {
-          setSavedKeyMasked('');
-          setHasLocalStorageKey(false);
-        }
-      }
-    } catch (_) {
-      setSavedKeyMasked('');
-      setHasLocalStorageKey(false);
-    }
+  const refreshKeyStatus = (providerId: AIProviderId) => {
+    const key = getProviderApiKey(providerId);
+    setSavedKeyMasked(key ? maskApiKey(key) : '');
+  };
+
+  const handleSelectProvider = (pid: AIProviderId) => {
+    setSelectedProvider(pid);
+    setActiveProviderId(pid);
+    setActiveAiProviderStore(pid);
+    setInputKey('');
+    setShowKey(false);
+    setTestStatus(null);
+    refreshKeyStatus(pid);
+    speechQueue.speak(`AI provider set to ${AI_PROVIDERS[pid].name}`, SpeechPriority.STATUS);
   };
 
   const handleSaveKey = () => {
-    const keyToSave = inputKey.trim();
+    let keyToSave = inputKey.trim();
     if (!keyToSave) {
       speechQueue.speak('Please enter a key before saving.', SpeechPriority.STATUS);
       return;
     }
 
+    // Smart auto-routing: if user entered a "gsk_..." key under Grok, save it under Groq
+    let targetProvider = selectedProvider;
+    if (keyToSave.startsWith('gsk_') && selectedProvider === 'grok') {
+      targetProvider = 'groq';
+      setSelectedProvider('groq');
+      setActiveProviderId('groq');
+      setActiveAiProviderStore('groq');
+    }
+
     try {
-      localStorage.setItem(GEMINI_STORAGE_KEY, keyToSave);
+      setProviderApiKey(targetProvider, keyToSave);
+      if (targetProvider === 'custom') {
+        setCustomBaseUrl(customBaseUrlInput);
+        setCustomModel(customModelInput);
+      }
       setInputKey('');
       setShowKey(false);
-      refreshKeyStatus();
+      refreshKeyStatus(targetProvider);
       setTestStatus(null);
       setKeyMissingAlert(false);
       setLastErrorDebug(null);
 
-      const successNotice = 'API key saved successfully.';
+      const successNotice = `${AI_PROVIDERS[targetProvider].name} API key saved.`;
       speechQueue.speak(successNotice, SpeechPriority.STATUS);
     } catch (err: any) {
       speechQueue.speak('Failed to save API key to local storage.', SpeechPriority.STATUS);
@@ -123,37 +145,37 @@ export const SettingsPage: React.FC = () => {
 
   const handleRemoveKey = () => {
     try {
-      localStorage.removeItem(GEMINI_STORAGE_KEY);
+      removeProviderApiKey(selectedProvider);
       setInputKey('');
       setShowKey(false);
       setTestStatus(null);
-      refreshKeyStatus();
+      refreshKeyStatus(selectedProvider);
 
-      const notice = 'API key removed.';
+      const notice = `${AI_PROVIDERS[selectedProvider].name} key removed.`;
       speechQueue.speak(notice, SpeechPriority.STATUS);
     } catch (_) {}
   };
 
   const handleTestKey = async () => {
-    // Test the input key if typed, otherwise test the saved key
-    const keyToTest = inputKey.trim() || getApiKey();
+    const keyToTest = inputKey.trim() || getProviderApiKey(selectedProvider);
+    const providerName = AI_PROVIDERS[selectedProvider].name;
 
     if (!keyToTest) {
       setTestStatus({
         tested: true,
         ok: false,
-        message: 'No key to test. Please enter or save an API key first.',
+        message: `No key to test. Please enter or save an API key for ${providerName} first.`,
       });
-      speechQueue.speak('No key to test. Please enter a key.', SpeechPriority.STATUS);
+      speechQueue.speak(`No key to test. Please enter a key.`, SpeechPriority.STATUS);
       return;
     }
 
     setIsTesting(true);
     setTestStatus(null);
-    speechQueue.speak('Testing API key with Gemini...', SpeechPriority.STATUS);
+    speechQueue.speak(`Testing API key with ${providerName}...`, SpeechPriority.STATUS);
 
     try {
-      const res = await testApiKey(keyToTest);
+      const res = await testApiKey(keyToTest, selectedProvider);
       setTestStatus({
         tested: true,
         ok: res.ok,
@@ -161,7 +183,13 @@ export const SettingsPage: React.FC = () => {
       });
 
       if (res.ok) {
-        speechQueue.speak('Key works.', SpeechPriority.STATUS);
+        // If it auto-detected Groq, update local selectedProvider state
+        const currentActive = getActiveProviderId();
+        if (currentActive !== selectedProvider) {
+          setSelectedProvider(currentActive);
+          refreshKeyStatus(currentActive);
+        }
+        speechQueue.speak('Key verified and working.', SpeechPriority.STATUS);
         setKeyMissingAlert(false);
         setLastErrorDebug(null);
       } else {
@@ -197,6 +225,8 @@ export const SettingsPage: React.FC = () => {
     speechQueue.speak("Today's statistics have been reset.", SpeechPriority.STATUS);
   };
 
+  const activeProviderConfig = AI_PROVIDERS[selectedProvider];
+
   return (
     <div className="space-y-6 max-w-4xl pb-12">
       <div>
@@ -204,7 +234,7 @@ export const SettingsPage: React.FC = () => {
           Accessibility & System Settings
         </h2>
         <p className="text-xs sm:text-sm font-semibold opacity-70">
-          Configure Gemini AI credentials, speech synthesis, display contrast, and diagnostics.
+          Configure multi-provider AI credentials (Gemini, Grok, DeepSeek, OpenAI, Claude), speech synthesis, display contrast, and diagnostics.
         </p>
       </div>
 
@@ -224,7 +254,7 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* FEATURE 1: GEMINI API KEY SECTION */}
+      {/* FEATURE: MULTI-AI PROVIDER & API KEY CONFIGURATION */}
       {/* ========================================================================= */}
       <div
         className={`rounded-[28px] p-6 transition-all shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05)] border ${
@@ -233,7 +263,7 @@ export const SettingsPage: React.FC = () => {
             : 'bg-white border-gray-200/80 text-gray-900'
         }`}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div className="flex items-center gap-3">
             <div
               className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
@@ -242,12 +272,12 @@ export const SettingsPage: React.FC = () => {
                   : 'bg-indigo-600 text-white shadow-md'
               }`}
             >
-              <Key className="w-5 h-5" />
+              <Cpu className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-extrabold text-base tracking-tight">Gemini API Key</h3>
+              <h3 className="font-extrabold text-base tracking-tight">AI Provider & API Key</h3>
               <p className="text-xs opacity-70">
-                Required for scene descriptions, visual text reading, and general questions.
+                Choose between Google Gemini, xAI Grok, DeepSeek, OpenAI, Claude, or custom endpoints.
               </p>
             </div>
           </div>
@@ -255,7 +285,7 @@ export const SettingsPage: React.FC = () => {
           {/* Current Saved Key Masked Badge */}
           {savedKeyMasked ? (
             <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono font-bold ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-mono font-bold ${
                 highContrast
                   ? 'bg-zinc-900 text-yellow-300 border border-yellow-400'
                   : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
@@ -263,8 +293,7 @@ export const SettingsPage: React.FC = () => {
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>
-                {hasLocalStorageKey ? 'Saved Key: ' : 'Env Key: '}
-                {savedKeyMasked}
+                {activeProviderConfig.name}: {savedKeyMasked}
               </span>
             </div>
           ) : (
@@ -276,20 +305,115 @@ export const SettingsPage: React.FC = () => {
               }`}
             >
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>No API key saved in Settings</span>
+              <span>No key saved for {activeProviderConfig.name}</span>
             </div>
           )}
         </div>
 
+        {/* Provider Selection Tabs */}
+        <div className="mb-5">
+          <label className="block text-xs font-bold tracking-wide uppercase opacity-80 mb-2">
+            Select Active AI Engine
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            {(Object.keys(AI_PROVIDERS) as AIProviderId[]).map((pid) => {
+              const prov = AI_PROVIDERS[pid];
+              const isSelected = selectedProvider === pid;
+              const hasKey = !!getProviderApiKey(pid);
+
+              return (
+                <button
+                  key={pid}
+                  type="button"
+                  onClick={() => handleSelectProvider(pid)}
+                  aria-pressed={isSelected}
+                  className={`p-3 rounded-2xl text-left border transition-all cursor-pointer flex flex-col justify-between min-h-[76px] ${
+                    isSelected
+                      ? highContrast
+                        ? 'bg-yellow-400 text-black border-yellow-400 font-extrabold shadow-md'
+                        : 'bg-indigo-600 text-white border-indigo-600 shadow-md ring-2 ring-indigo-400/40'
+                      : highContrast
+                      ? 'bg-zinc-950 border-zinc-800 text-yellow-300/80 hover:border-yellow-400/50'
+                      : 'bg-gray-50 border-gray-200 text-gray-800 hover:border-indigo-300 hover:bg-gray-100/70'
+                  }`}
+                >
+                  <div className="font-bold text-xs leading-tight flex items-center justify-between w-full">
+                    <span>{prov.name}</span>
+                    {hasKey && (
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          isSelected ? 'bg-white' : 'bg-emerald-500'
+                        }`}
+                        title="Key configured"
+                      />
+                    )}
+                  </div>
+                  <div
+                    className={`text-[10px] mt-1 font-mono truncate ${
+                      isSelected ? 'opacity-90' : 'opacity-60'
+                    }`}
+                  >
+                    {prov.defaultModel}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Custom Provider URL and Model inputs */}
+        {selectedProvider === 'custom' && (
+          <div className="p-4 rounded-2xl bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 mb-5 space-y-3">
+            <div className="flex items-center gap-2 font-bold text-xs">
+              <Server className="w-4 h-4 text-indigo-600" />
+              <span>Custom Endpoint Settings (OpenAI-compatible)</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold mb-1 opacity-80">Base URL</label>
+                <input
+                  type="text"
+                  value={customBaseUrlInput}
+                  onChange={(e) => setCustomBaseUrlInput(e.target.value)}
+                  placeholder="https://openrouter.ai/api/v1 or http://localhost:11434/v1"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold mb-1 opacity-80">Model Identifier</label>
+                <input
+                  type="text"
+                  value={customModelInput}
+                  onChange={(e) => setCustomModelInput(e.target.value)}
+                  placeholder="e.g. meta-llama/llama-3.1-70b-instruct"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Input & Show/Hide Field */}
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <label
-              htmlFor="gemini-api-key-input"
-              className="block text-xs font-bold tracking-wide uppercase opacity-80"
-            >
-              Enter API Key
-            </label>
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="ai-api-key-input"
+                className="block text-xs font-bold tracking-wide uppercase opacity-80"
+              >
+                {activeProviderConfig.name} API Key
+              </label>
+              <a
+                href={activeProviderConfig.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] font-bold text-indigo-600 dark:text-yellow-400 hover:underline flex items-center gap-1"
+              >
+                <span>Get {activeProviderConfig.name} Key</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
             <div
               className={`flex items-center rounded-2xl border transition-all ${
                 highContrast
@@ -298,14 +422,14 @@ export const SettingsPage: React.FC = () => {
               }`}
             >
               <input
-                id="gemini-api-key-input"
+                id="ai-api-key-input"
                 type={showKey ? 'text' : 'password'}
                 value={inputKey}
                 onChange={(e) => setInputKey(e.target.value)}
                 placeholder={
                   savedKeyMasked
-                    ? `Currently active: ${savedKeyMasked} (enter new key to replace)`
-                    : 'Paste your Gemini API key (e.g. AIzaSy...)'
+                    ? `Active: ${savedKeyMasked} (enter new key to update)`
+                    : `Paste your ${activeProviderConfig.name} API key (${activeProviderConfig.keyPrefixHint})`
                 }
                 autoComplete="off"
                 spellCheck="false"
@@ -328,7 +452,7 @@ export const SettingsPage: React.FC = () => {
               type="button"
               onClick={handleSaveKey}
               aria-label="Save API key"
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition shadow-sm min-h-[46px] ${
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition shadow-sm min-h-[46px] cursor-pointer ${
                 highContrast
                   ? 'bg-yellow-400 text-black hover:bg-yellow-300 font-extrabold'
                   : 'bg-indigo-600 text-white hover:bg-indigo-700'
@@ -342,8 +466,8 @@ export const SettingsPage: React.FC = () => {
               type="button"
               onClick={handleTestKey}
               disabled={isTesting}
-              aria-label="Test API key with Gemini"
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition border min-h-[46px] ${
+              aria-label={`Test API key with ${activeProviderConfig.name}`}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition border min-h-[46px] cursor-pointer ${
                 highContrast
                   ? 'bg-zinc-900 border-yellow-400 text-yellow-400 hover:bg-zinc-800'
                   : 'bg-white border-gray-300 text-gray-800 hover:bg-gray-50 shadow-sm'
@@ -354,15 +478,15 @@ export const SettingsPage: React.FC = () => {
               ) : (
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               )}
-              <span>{isTesting ? 'Testing...' : 'Test Key'}</span>
+              <span>{isTesting ? 'Verifying...' : `Test Key`}</span>
             </button>
 
-            {hasLocalStorageKey && (
+            {savedKeyMasked && (
               <button
                 type="button"
                 onClick={handleRemoveKey}
                 aria-label="Remove saved API key"
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 min-h-[46px]"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 min-h-[46px] cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Remove Key</span>
@@ -393,7 +517,7 @@ export const SettingsPage: React.FC = () => {
             </div>
           )}
 
-          {/* Active Model & Fallback Info */}
+          {/* Active Model & Engine Info */}
           <div
             className={`p-3 rounded-2xl text-xs flex flex-wrap items-center justify-between gap-2 border transition-all ${
               highContrast
@@ -402,29 +526,18 @@ export const SettingsPage: React.FC = () => {
             }`}
           >
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-indigo-600 dark:text-yellow-400 shrink-0" />
-              <span className="font-semibold">Gemini Model:</span>
-              <span className="font-mono font-bold px-2 py-0.5 rounded-md bg-white/80 dark:bg-black/50 border border-indigo-200 dark:border-yellow-400/40">
-                {GEMINI_DEFAULT_MODEL}
+              <Layers className="w-4 h-4 text-indigo-600 dark:text-yellow-400 shrink-0" />
+              <span className="font-semibold">Active AI Engine:</span>
+              <span className="font-bold text-indigo-700 dark:text-yellow-400">
+                {activeProviderConfig.name}
+              </span>
+              <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-white/80 dark:bg-black/50 border border-indigo-200 dark:border-yellow-400/40">
+                {selectedProvider === 'custom' ? customModelInput : activeProviderConfig.defaultModel}
               </span>
             </div>
-            <div className="text-[11px] opacity-75 font-mono">
-              Auto-fallback: {GEMINI_FALLBACK_MODEL}
+            <div className="text-[11px] opacity-75">
+              {activeProviderConfig.supportsVision ? 'Multimodal Vision Ready' : 'Text Reasoning Engine'}
             </div>
-          </div>
-
-          {/* Help text */}
-          <div className="pt-2 text-xs flex items-center gap-1.5 opacity-80">
-            <span>Get a free key at</span>
-            <a
-              href="https://aistudio.google.com/apikey"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-yellow-400 hover:underline"
-            >
-              <span>aistudio.google.com/apikey</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
           </div>
         </div>
       </div>
@@ -604,7 +717,7 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Reset Stats & Developer Tools */}
+      {/* Diagnostics & Maintenance */}
       <div
         className={`rounded-[28px] p-6 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05)] transition-all border ${
           highContrast
@@ -654,7 +767,7 @@ export const SettingsPage: React.FC = () => {
           <button
             onClick={handleResetStats}
             aria-label="Reset today's stats"
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-100 text-gray-800 font-bold text-xs hover:bg-gray-200 transition min-h-[46px]"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-100 text-gray-800 font-bold text-xs hover:bg-gray-200 transition min-h-[46px] cursor-pointer"
           >
             <RotateCcw className="w-4 h-4" />
             <span>Reset Today&apos;s Stats</span>
@@ -666,7 +779,7 @@ export const SettingsPage: React.FC = () => {
           <div>
             <strong className="text-xs block font-bold">Voice Debug Panel</strong>
             <span className="text-[11px] opacity-70">
-              Inspect duration, mimeType, raw transcript, full Gemini JSON, intent & latency.
+              Inspect duration, mimeType, raw transcript, full AI JSON, intent & latency.
             </span>
           </div>
           <input

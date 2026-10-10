@@ -108,7 +108,7 @@ async function processQueue() {
   isQueueProcessing = false;
 }
 
-function scheduleRateLimitedCall<T>(callFn: () => Promise<T>): Promise<T> {
+export function scheduleRateLimitedCall<T>(callFn: () => Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     callQueue.push(async () => {
       try {
@@ -187,7 +187,7 @@ export function formatSpecificError(err: any): { spoken: string; debug: string }
   return res;
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 8000): Promise<Response> {
+export async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -203,7 +203,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 8
 /**
  * Executes a direct Gemini REST request with automatic 404 fallback to gemini-3.5-flash-lite.
  */
-async function callGeminiDirectWithFallback(apiKey: string, body: any, timeoutMs = 8000): Promise<any> {
+export async function callGeminiDirectWithFallback(apiKey: string, body: any, timeoutMs = 8000): Promise<any> {
   const primaryUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_DEFAULT_MODEL}:generateContent?key=${apiKey}`;
   const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FALLBACK_MODEL}:generateContent?key=${apiKey}`;
 
@@ -401,7 +401,16 @@ export async function askGeneralQuestion(
   }
 
   const executeCall = async () => {
-    // Try server endpoint first
+    // If an alternative provider is active (Grok, DeepSeek, OpenAI, Claude, Custom), route through multi-AI service
+    const activeProvider = (await import('./aiProviders')).getActiveProviderId();
+    if (activeProvider !== 'gemini') {
+      const { askMultiProviderQuestion } = await import('./multiAiService');
+      const reply = await askMultiProviderQuestion(questionText, { deviceTime: context.deviceTime });
+      requestCache.set(cacheKey, { data: reply, timestamp: Date.now() });
+      return reply;
+    }
+
+    // Try server endpoint first for Gemini
     try {
       const serverRes = await fetchWithTimeout(
         '/api/gemini/general-question',
@@ -476,6 +485,13 @@ export async function describeSurroundings(imageBase64: string): Promise<string>
     'You are helping a blind person walk safely. In 2 short sentences, describe the obstacles and hazards in front of them with direction (left, ahead, right) and approximate distance. Mention stairs, poles, walls, doors, vehicles, people and ground hazards.';
 
   const executeCall = async () => {
+    // If an alternative provider is active (Grok, OpenAI, Claude, Custom), route through multi-AI service
+    const activeProvider = (await import('./aiProviders')).getActiveProviderId();
+    if (activeProvider !== 'gemini') {
+      const { describeSurroundingsMultiProvider } = await import('./multiAiService');
+      return await describeSurroundingsMultiProvider(imageBase64);
+    }
+
     try {
       const res = await fetchWithTimeout(
         '/api/gemini/describe-scene',
@@ -534,6 +550,13 @@ export async function readTextFromImage(imageBase64: string): Promise<string> {
     'Read all visible text in this image clearly and concisely for a blind person. If no text is readable, say "No readable text found". Do not describe anything other than the text itself.';
 
   const executeCall = async () => {
+    // If an alternative provider is active (Grok, OpenAI, Claude, Custom), route through multi-AI service
+    const activeProvider = (await import('./aiProviders')).getActiveProviderId();
+    if (activeProvider !== 'gemini') {
+      const { readTextMultiProvider } = await import('./multiAiService');
+      return await readTextMultiProvider(imageBase64);
+    }
+
     try {
       const res = await fetchWithTimeout(
         '/api/gemini/read-text',

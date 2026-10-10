@@ -55,9 +55,19 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'डॅशबोर्ड उघडत आहे',
     },
     keywords: {
-      en: ['dashboard', 'home', 'main screen', 'main page'],
-      hi: ['डैशबोर्ड', 'होम', 'मुख्य पृष्ठ', 'मुख्य स्क्रीन'],
-      mr: ['डॅशबोर्ड', 'होम', 'मुख्य पृष्ठ', 'मुख्य स्क्रीन'],
+      en: [
+        'dashboard',
+        'home',
+        'main screen',
+        'main page',
+        'overview',
+        'summary',
+        'go to dashboard',
+        'open dashboard',
+        'show dashboard',
+      ],
+      hi: ['डैशबोर्ड', 'होम', 'मुख्य पृष्ठ', 'मुख्य स्क्रीन', 'डैशबोर्ड खोलो'],
+      mr: ['डॅशबोर्ड', 'होम', 'मुख्य पृष्ठ', 'मुख्य स्क्रीन', 'डॅशबोर्ड उघडा'],
     },
   },
   {
@@ -69,9 +79,23 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'डिटेक्शन उघडत आहे',
     },
     keywords: {
-      en: ['detection', 'camera', 'vision', 'obstacle', 'live camera'],
-      hi: ['डिटेक्शन', 'कैमरा', 'कॅमेरा', 'दृष्टी'],
-      mr: ['डिटेक्शन', 'कॅमेरा', 'दृष्टी'],
+      en: [
+        'detection',
+        'detect',
+        'camera',
+        'vision',
+        'obstacle',
+        'obstacles',
+        'live camera',
+        'object detection',
+        'go to detection',
+        'open detection',
+        'show detection',
+        'go to camera',
+        'open camera screen',
+      ],
+      hi: ['डिटेक्शन', 'कैमरा', 'कॅमेरा', 'दृष्टी', 'ऑब्जेक्ट', 'पहचान', 'डिटेक्शन खोलो'],
+      mr: ['डिटेक्शन', 'कॅमेरा', 'दृष्टी', 'ऑब्जेक्ट', 'वस्तू शोधणे', 'डिटेक्शन उघडा'],
     },
   },
   {
@@ -83,9 +107,23 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'नेव्हिगेशन उघडत आहे',
     },
     keywords: {
-      en: ['open navigation', 'show navigation', 'navigation tab', 'navigation screen', 'open map', 'show map', 'map tab', 'view map', 'navigation', 'map'],
-      hi: ['नेविगेशन खोलें', 'रास्ता दिखाओ', 'नेविगेशन'],
-      mr: ['नकाशा उघडा', 'मार्ग दाखवा', 'नकाशा'],
+      en: [
+        'navigation',
+        'navigate',
+        'map',
+        'maps',
+        'gps',
+        'open navigation',
+        'show navigation',
+        'navigation tab',
+        'navigation screen',
+        'open map',
+        'show map',
+        'map tab',
+        'view map',
+      ],
+      hi: ['नेविगेशन', 'नक्शा', 'रास्ता दिखाओ', 'नेविगेशन खोलें', 'नेविगेशन टैब'],
+      mr: ['नेव्हिगेशन', 'नकाशा', 'मार्ग दाखवा', 'नकाशा उघडा', 'नेव्हिगेशन टॅब'],
     },
   },
   {
@@ -97,9 +135,20 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'व्हॉइस असिस्टंट उघडत आहे',
     },
     keywords: {
-      en: ['voice', 'voice assistant', 'assistant'],
-      hi: ['वॉइस', 'आवाज', 'असिस्टंट'],
-      mr: ['वॉइस', 'आवाज', 'असिस्टंट'],
+      en: [
+        'voice',
+        'voice assistant',
+        'assistant',
+        'mic',
+        'microphone',
+        'go to voice',
+        'open voice',
+        'show voice',
+        'voice tab',
+        'voice screen',
+      ],
+      hi: ['वॉइस', 'आवाज', 'असिस्टंट', 'सहायक', 'माइक', 'वॉइस टैब'],
+      mr: ['वॉइस', 'आवाज', 'असिस्टंट', 'सहाय्यक', 'माइक', 'व्हॉइस टॅब'],
     },
   },
   {
@@ -111,9 +160,17 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'आपत्कालीन मदत उघडत आहे',
     },
     keywords: {
-      en: ['emergency', 'sos', 'help me'],
-      hi: ['इमरजेंसी', 'आपातकाल', 'मदद'],
-      mr: ['आणीबाणी', 'मदत'],
+      en: [
+        'emergency',
+        'sos',
+        'help me',
+        'emergency tab',
+        'emergency screen',
+        'go to emergency',
+        'open emergency',
+      ],
+      hi: ['इमरजेंसी', 'आपातकाल', 'मदद', 'इमरजेंसी टैब'],
+      mr: ['आणीबाणी', 'मदत', 'इमर्जन्सी', 'आणीबाणी टॅब'],
     },
   },
   {
@@ -125,9 +182,20 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
       mr: 'सेटिंग्ज उघडत आहे',
     },
     keywords: {
-      en: ['settings', 'setting', 'preferences', 'api key', 'language', 'volume'],
-      hi: ['सेटिंग', 'भाषा', 'आवाज़ सेटिंग'],
-      mr: ['सेटिंग्ज', 'भाषा', 'आवाज सेटिंग'],
+      en: [
+        'settings',
+        'setting',
+        'preferences',
+        'api key',
+        'language',
+        'volume',
+        'go to settings',
+        'open settings',
+        'show settings',
+        'settings tab',
+      ],
+      hi: ['सेटिंग', 'भाषा', 'आवाज़ सेटिंग', 'सेटिंग्स', 'सेटिंग खोलो'],
+      mr: ['सेटिंग्ज', 'भाषा', 'आवाज सेटिंग', 'सेटिंग्ज उघडा'],
     },
   },
 ];
@@ -201,48 +269,59 @@ export interface NavigationIntentParse {
 export function matchTabFromSpeech(rawText: string): { isTab: boolean; tab?: ActiveTab; confirmation?: string } {
   if (!rawText) return { isTab: false };
 
-  // 1. Remove words: "tab", "screen", "page", "section", "window", and Hindi/Marathi equivalents (टैब, स्क्रीन, पेज, विभाग)
-  const tabFilterRegex = /\b(tab|tabs|screen|screens|page|pages|section|sections|window|windows)\b|टैब|स्क्रीन|पेज|विभाग/gi;
-  const filtered = rawText.replace(tabFilterRegex, ' ').replace(/\s+/g, ' ').trim();
+  // 1. Clean the incoming text
+  const cleaned = cleanSpokenText(rawText);
+  if (!cleaned) return { isTab: false };
 
-  // Normalize
-  const cleanedFiltered = cleanSpokenText(filtered);
-  if (!cleanedFiltered) return { isTab: false };
-
-  // Guard against explicit action commands like "start detection" or "stop navigation"
+  // 2. Guard against explicit start/stop action triggers
   const isStartStopAction =
-    cleanedFiltered.startsWith('start ') ||
-    cleanedFiltered.startsWith('stop ') ||
-    cleanedFiltered.startsWith('turn on') ||
-    cleanedFiltered.startsWith('turn off') ||
-    cleanedFiltered.includes('start detection') ||
-    cleanedFiltered.includes('stop detection') ||
-    cleanedFiltered.includes('start navigation') ||
-    cleanedFiltered.includes('stop navigation') ||
-    cleanedFiltered.includes('start listening') ||
-    cleanedFiltered.includes('stop listening');
+    cleaned.startsWith('start ') ||
+    cleaned.startsWith('stop ') ||
+    cleaned.startsWith('turn on') ||
+    cleaned.startsWith('turn off') ||
+    cleaned.includes('start detection') ||
+    cleaned.includes('stop detection') ||
+    cleaned.includes('start navigation') ||
+    cleaned.includes('stop navigation') ||
+    cleaned.includes('start listening') ||
+    cleaned.includes('stop listening');
 
   if (isStartStopAction) {
     return { isTab: false };
   }
 
-  // 2. Strip leading navigation/action prefixes: "go to the", "go to", "open", "show", "switch to", "take me to", etc.
+  // 3. Remove container words: "tab", "screen", "page", "section", "window" and Hindi/Marathi equivalents
+  const tabFilterRegex = /\b(tab|tabs|screen|screens|page|pages|section|sections|window|windows)\b|टैब|स्क्रीन|पेज|विभाग|विंडो/gi;
+  const filtered = cleaned.replace(tabFilterRegex, ' ').replace(/\s+/g, ' ').trim();
+
+  // 4. Strip navigation/action prefixes
   const leadingPrefixes =
-    /^(?:please\s+|can\s+you\s+|could\s+you\s+|i\s+want\s+to\s+see\s+|open\s+the\s+|open\s+|show\s+the\s+|show\s+|go\s+to\s+the\s+|go\s+to\s+|switch\s+to\s+the\s+|switch\s+to\s+|take\s+me\s+to\s+the\s+|take\s+me\s+to\s+|move\s+to\s+the\s+|move\s+to\s+|view\s+the\s+|view\s+|navigate\s+to\s+the\s+|navigate\s+to\s+|चलो\s+|खोलो\s+|उघड\s+|जा\s+|दाखवा\s+|बघा\s+)/i;
-  const stripped = cleanedFiltered.replace(leadingPrefixes, '').trim();
+    /^(?:please\s+|can\s+you\s+|could\s+you\s+|i\s+want\s+to\s+see\s+|open\s+the\s+|open\s+|show\s+the\s+|show\s+|go\s+to\s+the\s+|go\s+to\s+|switch\s+to\s+the\s+|switch\s+to\s+|take\s+me\s+to\s+the\s+|take\s+me\s+to\s+|move\s+to\s+the\s+|move\s+to\s+|view\s+the\s+|view\s+|navigate\s+to\s+the\s+|navigate\s+to\s+|goto\s+the\s+|goto\s+|चलो\s+|खोलो\s+|उघड\s+|जा\s+|दाखवा\s+|बघा\s+)+/i;
+  const stripped = filtered.replace(leadingPrefixes, '').trim();
 
   const app = useAppStore.getState();
   const currentLang = app.language || 'en-US';
 
+  // 5. Test each configured tab route
   for (const route of TAB_ROUTES) {
     let matchedLang: 'en' | 'hi' | 'mr' | null = null;
 
     const testMatch = (kw: string) => {
       const cleanKw = cleanSpokenText(kw);
       if (!cleanKw) return false;
-      if (stripped === cleanKw || cleanedFiltered === cleanKw) return true;
-      const strippedWords = stripped.split(' ');
-      if (strippedWords.length <= 2 && strippedWords.includes(cleanKw)) return true;
+
+      // Exact match against cleaned, filtered, or stripped
+      if (cleaned === cleanKw || filtered === cleanKw || stripped === cleanKw) return true;
+
+      // Check stripped words
+      const strippedTokens = stripped.split(' ').filter(Boolean);
+      if (strippedTokens.length > 0 && strippedTokens[0] === cleanKw) return true;
+      if (strippedTokens.includes(cleanKw)) return true;
+
+      // Word boundary regex
+      const re = new RegExp(`(^|\\s)${cleanKw}(\\s|$)`, 'i');
+      if (re.test(filtered) || re.test(stripped)) return true;
+
       return false;
     };
 
@@ -272,6 +351,39 @@ export function matchTabFromSpeech(rawText: string): { isTab: boolean; tab?: Act
     if (matchedLang) {
       const confirmation = getLocalizedConfirmation(route.confirmations, matchedLang, currentLang);
       return { isTab: true, tab: route.tab, confirmation };
+    }
+  }
+
+  // 6. Direct word fallback check for each tab
+  const directTabMap: Record<string, ActiveTab> = {
+    dashboard: 'dashboard',
+    home: 'dashboard',
+    detection: 'detection',
+    detect: 'detection',
+    camera: 'detection',
+    vision: 'detection',
+    navigation: 'navigation',
+    map: 'navigation',
+    maps: 'navigation',
+    voice: 'voice',
+    assistant: 'voice',
+    mic: 'voice',
+    emergency: 'emergency',
+    sos: 'emergency',
+    settings: 'settings',
+    setting: 'settings',
+    preferences: 'settings',
+  };
+
+  const strippedWords = stripped.split(' ').filter(Boolean);
+  for (const word of strippedWords) {
+    if (directTabMap[word]) {
+      const targetTab = directTabMap[word];
+      const foundRoute = TAB_ROUTES.find((r) => r.tab === targetTab);
+      const confirmation = foundRoute
+        ? getLocalizedConfirmation(foundRoute.confirmations, 'en', currentLang)
+        : `Opening ${targetTab}`;
+      return { isTab: true, tab: targetTab, confirmation };
     }
   }
 
@@ -551,6 +663,21 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
 
     const dest = navParsed.destination;
     const travelmode = navParsed.travelmode;
+
+    // Safety check: if destination accidentally contains a tab keyword (e.g. detection, voice, dashboard)
+    const safetyTabCheck = matchTabFromSpeech(dest);
+    if (safetyTabCheck.isTab && safetyTabCheck.tab) {
+      app.setActiveTab(safetyTabCheck.tab);
+      const confirmReply = safetyTabCheck.confirmation || `Opening ${safetyTabCheck.tab}`;
+      speechQueue.speak(confirmReply, SpeechPriority.STATUS);
+      app.setLastTranscript(rawText.trim());
+      stats.recordVoiceCommandSuccess(`switch to ${safetyTabCheck.tab}`, confirmReply);
+      return {
+        matched: true,
+        commandName: `switch_to_${safetyTabCheck.tab}`,
+        spokenReply: confirmReply,
+      };
+    }
 
     // Use openGoogleMaps everywhere (never window.open)
     await openGoogleMaps(dest, {

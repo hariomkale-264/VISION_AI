@@ -388,6 +388,49 @@ Respond ONLY with a JSON object adhering to this schema:
     }
   });
 
+  // Universal proxy endpoint for external AI providers (xAI Grok, DeepSeek, OpenAI, Claude, Custom)
+  // Eliminates browser CORS issues and resolves exact error payloads
+  app.post('/api/ai/proxy', async (req, res) => {
+    try {
+      const { url, method = 'POST', headers = {}, body } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: 'url is required' });
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+      const fetchOptions: RequestInit = {
+        method,
+        headers,
+        signal: controller.signal,
+      };
+
+      if (body && (method === 'POST' || method === 'PUT')) {
+        fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+      }
+
+      const upstreamRes = await fetch(url, fetchOptions);
+      clearTimeout(timeoutId);
+
+      const contentType = upstreamRes.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const json = await upstreamRes.json();
+        return res.status(upstreamRes.status).json(json);
+      } else {
+        const text = await upstreamRes.text();
+        return res.status(upstreamRes.status).send(text);
+      }
+    } catch (proxyErr: any) {
+      console.error('Error in /api/ai/proxy:', proxyErr);
+      return res.status(500).json({
+        error: {
+          message: proxyErr.message || 'Proxy request failed',
+        },
+      });
+    }
+  });
+
   const server = http.createServer(app);
 
   if (process.env.NODE_ENV === 'production') {

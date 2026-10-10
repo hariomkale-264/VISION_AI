@@ -129,7 +129,15 @@ class SpeechQueueService {
       item.onStart?.();
     };
 
+    // Safety watchdog: Chrome SpeechSynthesis can silently stall or drop onend
+    const maxDuration = Math.max(4500, item.text.length * 120);
+    const watchdogTimeout = setTimeout(() => {
+      console.warn('[SpeechQueue] Watchdog timeout triggered, forcing finish');
+      handleFinished();
+    }, maxDuration);
+
     const handleFinished = () => {
+      clearTimeout(watchdogTimeout);
       item.onEnd?.();
       this.currentUtterance = null;
       this.isSpeaking = false;
@@ -138,10 +146,10 @@ class SpeechQueueService {
       if (this.queue.length > 0) {
         this.processNext();
       } else {
-        // When speech is completely done, wait 400ms before unmuting mic capture so assistant never hears itself!
+        // When speech is completely done, wait 300ms before unmuting mic capture so assistant never hears itself!
         this.resumeMicTimeout = setTimeout(() => {
           setIsSpeaking(false);
-        }, 400);
+        }, 300);
       }
     };
 

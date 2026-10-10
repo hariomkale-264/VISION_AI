@@ -133,7 +133,6 @@ export default function App() {
 
     document.addEventListener('visibilitychange', handleReturnFromMaps);
     window.addEventListener('focus', handleReturnFromMaps);
-    handleReturnFromMaps();
 
     return () => {
       document.removeEventListener('visibilitychange', handleReturnFromMaps);

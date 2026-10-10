@@ -86,12 +86,12 @@ export function useContinuousMic() {
         return;
       }
 
-      // 3. Check if Gemini API key exists
+      // 3. Check if active AI key exists
       const apiKey = getApiKey();
       if (!apiKey) {
         const fallbackMsg = 'I did not understand. Say open settings to add your API key.';
         setLastUtteranceResult(transcript, 'unknown', fallbackMsg);
-        setLastErrorDebug('Gemini API key is missing. Please add it in Settings.');
+        setLastErrorDebug('AI API key is missing. Please add it in Settings.');
         setKeyMissingAlert(true);
         speechQueue.speak(fallbackMsg, SpeechPriority.ASSISTANT_REPLY);
         return;

@@ -35,19 +35,25 @@ export async function searchDestination(
     url += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
   }
 
-  const response = await fetch(url, {
-    headers: {
-      'Accept': 'application/json',
-      'User-Agent': 'VISION_AI_Assistive_App/1.0',
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-  if (!response.ok) {
-    throw new Error(`Nominatim geocoding failed: ${response.status}`);
-  }
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'VISION_AI_Assistive_App/1.0',
+      },
+    });
+    clearTimeout(timeoutId);
 
-  const data = await response.json();
-  const results: GeocodeMatch[] = (data || []).map((item: any) => {
+    if (!response.ok) {
+      throw new Error(`Nominatim geocoding failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const results: GeocodeMatch[] = (data || []).map((item: any) => {
     const lat = parseFloat(item.lat);
     const lng = parseFloat(item.lon);
     let distanceMeters: number | undefined;
@@ -70,7 +76,12 @@ export async function searchDestination(
     results.sort((a, b) => (a.distanceMeters || 0) - (b.distanceMeters || 0));
   }
 
-  return results;
+    return results;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    console.warn('Nominatim geocoding aborted or failed:', err);
+    return [];
+  }
 }
 
 let cachedReverseGeocode: { lat: number; lng: number; time: number; address: string } | null = null;

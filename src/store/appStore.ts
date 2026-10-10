@@ -166,6 +166,10 @@ interface AppState {
   setKeyMissingAlert: (val: boolean) => void;
   setLastTranscript: (text: string) => void;
 
+  // Active AI Provider (Gemini, Groq, Grok, DeepSeek, OpenAI, Claude, Custom)
+  activeAiProvider: 'gemini' | 'groq' | 'openai' | 'grok' | 'deepseek' | 'claude' | 'custom';
+  setActiveAiProvider: (provider: 'gemini' | 'groq' | 'openai' | 'grok' | 'deepseek' | 'claude' | 'custom') => void;
+
   // Settings & Accessibility
   highContrast: boolean;
   setHighContrast: (val: boolean) => void;
@@ -345,6 +349,9 @@ export const useAppStore = create<AppState>()(
       setKeyMissingAlert: (keyMissingAlert) => set({ keyMissingAlert }),
       setLastTranscript: (text) => set({ lastTranscript: text }),
 
+      activeAiProvider: 'gemini',
+      setActiveAiProvider: (activeAiProvider) => set({ activeAiProvider }),
+
       highContrast: false,
       setHighContrast: (highContrast) => set({ highContrast }),
       largeText: false,
@@ -383,6 +390,7 @@ export const useAppStore = create<AppState>()(
         showDetectionDebug: state.showDetectionDebug,
         voiceDebugPanel: state.voiceDebugPanel,
         autoStartTurnByTurn: state.autoStartTurnByTurn,
+        activeAiProvider: state.activeAiProvider,
       }),
     }
   )
