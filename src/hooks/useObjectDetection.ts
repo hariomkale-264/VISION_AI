@@ -13,27 +13,86 @@ import { getDistanceEstimate, getEstimatedMetersString } from '../utils/distance
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
 import { audioFeedback } from '../services/audioFeedback';
 
-// Distinct color generator for classes
+// Distinct color generator for 80 COCO-SSD classes (supports both spaced and underscore names)
 const CLASS_COLORS: Record<string, string> = {
   person: '#3B82F6',
   chair: '#10B981',
   bottle: '#8B5CF6',
+  cup: '#06B6D4',
+  'wine glass': '#EC4899',
   car: '#EF4444',
   bicycle: '#F59E0B',
-  dog: '#EC4899',
-  cat: '#06B6D4',
-  bench: '#14B8A6',
-  backpack: '#6366F1',
-  cell_phone: '#F97316',
-  laptop: '#84CC16',
+  motorcycle: '#F97316',
+  airplane: '#6366F1',
+  bus: '#EA580C',
+  train: '#8B5CF6',
+  truck: '#DC2626',
+  boat: '#0284C7',
+  'traffic light': '#EAB308',
   traffic_light: '#EAB308',
+  'fire hydrant': '#EF4444',
+  'stop sign': '#DC2626',
   stop_sign: '#DC2626',
+  bench: '#14B8A6',
+  bird: '#10B981',
+  cat: '#F43F5E',
+  dog: '#EC4899',
+  backpack: '#6366F1',
+  umbrella: '#A855F7',
+  handbag: '#EC4899',
+  tie: '#4F46E5',
+  suitcase: '#7C3AED',
+  'sports ball': '#F59E0B',
+  bottle_cap: '#8B5CF6',
+  fork: '#65A30D',
+  knife: '#DC2626',
+  spoon: '#CA8A04',
+  bowl: '#0891B2',
+  banana: '#FACC15',
+  apple: '#EF4444',
+  sandwich: '#F59E0B',
+  orange: '#FB923C',
+  pizza: '#F87171',
+  donut: '#DB2777',
+  cake: '#F43F5E',
+  couch: '#047857',
+  'potted plant': '#16A34A',
+  potted_plant: '#16A34A',
+  bed: '#6D28D9',
+  'dining table': '#B45309',
+  dining_table: '#B45309',
+  toilet: '#64748B',
+  tv: '#4F46E5',
+  laptop: '#84CC16',
+  mouse: '#7C3AED',
+  remote: '#0284C7',
+  keyboard: '#059669',
+  'cell phone': '#F97316',
+  cell_phone: '#F97316',
+  microwave: '#475569',
+  oven: '#334155',
+  toaster: '#EAB308',
+  sink: '#0EA5E9',
+  refrigerator: '#64748B',
+  book: '#D97706',
+  clock: '#EA580C',
+  vase: '#DB2777',
+  scissors: '#DC2626',
+  'teddy bear': '#F59E0B',
+  'hair drier': '#A855F7',
+  toothbrush: '#14B8A6',
   door: '#A855F7',
 };
 
 function getClassColor(className: string): string {
-  if (CLASS_COLORS[className]) return CLASS_COLORS[className];
-  // Hash to HSL
+  const norm = className.toLowerCase().trim();
+  if (CLASS_COLORS[norm]) return CLASS_COLORS[norm];
+  const spaced = norm.replace(/_/g, ' ');
+  if (CLASS_COLORS[spaced]) return CLASS_COLORS[spaced];
+  const underscored = norm.replace(/\s+/g, '_');
+  if (CLASS_COLORS[underscored]) return CLASS_COLORS[underscored];
+
+  // Hash to HSL for unknown classes
   let hash = 0;
   for (let i = 0; i < className.length; i++) {
     hash = className.charCodeAt(i) + ((hash << 5) - hash);
@@ -73,7 +132,7 @@ export function useObjectDetection(
   const frameCountRef = useRef<number>(0);
   const fpsTimerRef = useRef<number>(performance.now());
 
-  // Load COCO-SSD model
+  // Load COCO-SSD model with automatic fallback
   const loadModel = useCallback(async () => {
     try {
       setIsModelLoading(true);
@@ -82,9 +141,16 @@ export function useObjectDetection(
 
       await tf.ready();
       const baseModel = modelType === 'lite_mobilenet_v2' ? 'lite_mobilenet_v2' : 'mobilenet_v2';
-      const loadedModel = await cocoSsd.load({ base: baseModel });
+      try {
+        const loadedModel = await cocoSsd.load({ base: baseModel });
+        modelRef.current = loadedModel;
+      } catch (err) {
+        console.warn('Initial model load failed, attempting fallback profile...', err);
+        const altModel = baseModel === 'mobilenet_v2' ? 'lite_mobilenet_v2' : 'mobilenet_v2';
+        const fallbackLoaded = await cocoSsd.load({ base: altModel });
+        modelRef.current = fallbackLoaded;
+      }
 
-      modelRef.current = loadedModel;
       setIsModelLoading(false);
       setModelLoadError(null);
       announceAria('Vision model ready');
@@ -140,8 +206,7 @@ export function useObjectDetection(
         const vWidth = video.videoWidth;
         const vHeight = video.videoHeight;
 
-        // 1. Draw frame to an offscreen canvas at a sensible size (~640px wide)
-        // Passing downscaled frame avoids freezing main thread on 1080p/4K feeds
+        // 1. Maintain offscreen canvas for fallback / downscaling
         const DETECT_WIDTH = 640;
         const detectScale = DETECT_WIDTH / vWidth;
         const detectW = DETECT_WIDTH;
@@ -157,163 +222,195 @@ export function useObjectDetection(
         }
 
         const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
-        if (offCtx) {
-          offCtx.drawImage(video, 0, 0, detectW, detectH);
+
+        try {
+          // Query model with sensitive internal threshold (0.12) so everyday non-person objects
+          // (bottles, cups, phones, laptops, chairs, books, backpacks) aren't prematurely pruned by NMS
+          const queryMinScore = 0.12;
+          let rawPredictions: cocoSsd.DetectedObject[] = [];
 
           try {
-            // Run on-device COCO-SSD detection on downscaled canvas (0 API calls!)
-            const rawPredictions = await model.detect(offCanvas, 20, confidenceThreshold);
-
-            // Filter out predictions below confidence threshold (default 0.5)
-            const predictions = rawPredictions.filter((p) => p.score >= confidenceThreshold);
-
-            // 2. Set overlay canvas size to match the displayed CSS dimensions
-            const dispWidth = canvas.clientWidth || video.clientWidth || vWidth;
-            const dispHeight = canvas.clientHeight || video.clientHeight || vHeight;
-            if (canvas.width !== dispWidth || canvas.height !== dispHeight) {
-              canvas.width = dispWidth;
-              canvas.height = dispHeight;
+            // Direct video element detection runs through WebGL textures with full dynamic range
+            rawPredictions = await model.detect(video, 40, queryMinScore);
+          } catch (vidDetectErr) {
+            // Fallback to offscreen canvas if browser requires canvas tensor conversion
+            if (offCtx) {
+              offCtx.drawImage(video, 0, 0, detectW, detectH);
+              const canvasPreds = await model.detect(offCanvas, 40, queryMinScore);
+              rawPredictions = canvasPreds.map((p) => ({
+                ...p,
+                bbox: [
+                  p.bbox[0] / detectScale,
+                  p.bbox[1] / detectScale,
+                  p.bbox[2] / detectScale,
+                  p.bbox[3] / detectScale,
+                ] as [number, number, number, number],
+              }));
             }
+          }
 
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.clearRect(0, 0, dispWidth, dispHeight);
+          // Balanced multi-class threshold:
+          // Large humans easily score 0.70-0.95+, whereas everyday items (phone, bottle, cup, fork, book, chair)
+          // typically score 0.20-0.45. Apply adaptive threshold so non-person items are not silenced or failed.
+          const predictions = rawPredictions.filter((p) => {
+            const isPerson = p.class.toLowerCase() === 'person';
+            const effectiveThreshold = isPerson
+              ? confidenceThreshold
+              : Math.min(confidenceThreshold, Math.max(0.18, confidenceThreshold * 0.75));
+            return p.score >= effectiveThreshold;
+          });
 
-              // Calculate object-cover scale and offsets to align overlay with video accurately
-              const coverScale = Math.max(dispWidth / vWidth, dispHeight / vHeight);
-              const renderW = vWidth * coverScale;
-              const renderH = vHeight * coverScale;
-              const offsetX = (dispWidth - renderW) / 2;
-              const offsetY = (dispHeight - renderH) / 2;
+          // 2. Set overlay canvas size to match the displayed CSS dimensions
+          const dispWidth = canvas.clientWidth || video.clientWidth || vWidth;
+          const dispHeight = canvas.clientHeight || video.clientHeight || vHeight;
+          if (canvas.width !== dispWidth || canvas.height !== dispHeight) {
+            canvas.width = dispWidth;
+            canvas.height = dispHeight;
+          }
 
-              const frameArea = vWidth * vHeight;
-              const liveItems: LiveDetectionItem[] = [];
-              let maxArea = 0;
-              let nearestItemIdx = -1;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, dispWidth, dispHeight);
 
-              // Process each prediction with properly scaled coordinates
-              predictions.forEach((pred, index) => {
-                const [px, py, pw, ph] = pred.bbox;
+            // Calculate object-cover scale and offsets to align overlay with video accurately
+            const coverScale = Math.max(dispWidth / vWidth, dispHeight / vHeight);
+            const renderW = vWidth * coverScale;
+            const renderH = vHeight * coverScale;
+            const offsetX = (dispWidth - renderW) / 2;
+            const offsetY = (dispHeight - renderH) / 2;
 
-                // Scale from offscreen canvas coordinates back to full video coordinates
-                const vx = px / detectScale;
-                const vy = py / detectScale;
-                const vw = pw / detectScale;
-                const vh = ph / detectScale;
+            const frameArea = vWidth * vHeight;
+            const liveItems: LiveDetectionItem[] = [];
+            let maxArea = 0;
+            let nearestItemIdx = -1;
 
-                // Scale from full video coordinates to displayed overlay canvas
-                const x = Math.round(offsetX + vx * coverScale);
-                const y = Math.round(offsetY + vy * coverScale);
-                const w = Math.round(vw * coverScale);
-                const h = Math.round(vh * coverScale);
+            // Process each prediction with properly scaled coordinates
+            predictions.forEach((pred, index) => {
+              // Coordinate values are in video coordinate space
+              const [vx, vy, vw, vh] = pred.bbox;
 
-                const boxArea = vw * vh;
-                const centerX = vx + vw / 2;
-                const direction = getDirection(centerX, vWidth);
-                const { label: distanceLabel, ratio } = getDistanceEstimate(boxArea, frameArea);
-                const distanceMetersStr = getEstimatedMetersString(ratio);
+              // Scale from full video coordinates to displayed overlay canvas
+              const x = Math.round(offsetX + vx * coverScale);
+              const y = Math.round(offsetY + vy * coverScale);
+              const w = Math.round(vw * coverScale);
+              const h = Math.round(vh * coverScale);
 
-                if (boxArea > maxArea) {
-                  maxArea = boxArea;
-                  nearestItemIdx = index;
-                }
+              const boxArea = vw * vh;
+              const centerX = vx + vw / 2;
+              const direction = getDirection(centerX, vWidth);
+              const { label: distanceLabel, ratio } = getDistanceEstimate(boxArea, frameArea, pred.class);
+              const distanceMetersStr = getEstimatedMetersString(ratio, pred.class);
 
-                // Record real object in stats store
-                recordObjectDetection(pred.class, [vx, vy, vw, vh], pred.score, direction, distanceMetersStr);
+              if (boxArea > maxArea) {
+                maxArea = boxArea;
+                nearestItemIdx = index;
+              }
 
-                liveItems.push({
-                  id: `det-${index}-${pred.class}`,
-                  className: pred.class,
-                  direction,
-                  distanceLabel,
-                  confidence: pred.score,
-                  isNearest: false,
-                  timestamp: Date.now(),
-                });
+              // Record real object in stats store
+              recordObjectDetection(pred.class, [vx, vy, vw, vh], pred.score, direction, distanceMetersStr);
 
-                // Draw bounding box
-                const color = getClassColor(pred.class);
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 3.5;
-                ctx.strokeRect(x, y, w, h);
-
-                // Draw filled badge tag with class name & confidence percentage
-                const tagText = `${pred.class.toUpperCase()} ${Math.round(pred.score * 100)}%`;
-                ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
-                const textMetrics = ctx.measureText(tagText);
-                const tagHeight = 24;
-                const tagWidth = textMetrics.width + 14;
-
-                ctx.fillStyle = color;
-                ctx.fillRect(x, Math.max(0, y - tagHeight), tagWidth, tagHeight);
-
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillText(tagText, x + 7, Math.max(16, y - 6));
+              liveItems.push({
+                id: `det-${index}-${pred.class}`,
+                className: pred.class,
+                direction,
+                distanceLabel,
+                confidence: pred.score,
+                isNearest: false,
+                timestamp: Date.now(),
               });
 
-              // Mark nearest object
-              if (nearestItemIdx !== -1 && liveItems[nearestItemIdx]) {
-                liveItems[nearestItemIdx].isNearest = true;
-              }
+              // Draw bounding box
+              const color = getClassColor(pred.class);
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 3.5;
+              ctx.strokeRect(x, y, w, h);
 
-              // Update live detections in store
-              updateLiveDetections(liveItems);
+              // Draw filled badge tag with clean class name & confidence percentage
+              const displayClass = pred.class.replace(/_/g, ' ');
+              const tagText = `${displayClass.toUpperCase()} ${Math.round(pred.score * 100)}%`;
+              ctx.font = 'bold 13px "Plus Jakarta Sans", sans-serif';
+              const textMetrics = ctx.measureText(tagText);
+              const tagHeight = 22;
+              const tagWidth = textMetrics.width + 12;
 
-              // Proximity speech alerts & directional audio feedback
-              if (liveItems.length > 0) {
-                const currentTime = Date.now();
-                const candidatesToSpeak: Array<{
-                  className: string;
-                  direction: string;
-                  distanceLabel: 'very close' | 'close' | 'far';
-                }> = [];
+              ctx.fillStyle = color;
+              ctx.fillRect(x, Math.max(0, y - tagHeight), tagWidth, tagHeight);
 
-                const sorted = [...liveItems].sort((a, b) => {
-                  const weight = (l: string) => (l === 'very close' ? 3 : l === 'close' ? 2 : 1);
-                  return weight(b.distanceLabel) - weight(a.distanceLabel);
-                });
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillText(tagText, x + 6, Math.max(15, y - 6));
+            });
 
-                for (const item of sorted) {
-                  if (item.distanceLabel === 'far' && !speakFarObjects && sorted.some((s) => s.distanceLabel !== 'far')) {
-                    continue;
-                  }
-
-                  const alertKey = `${item.className}_${item.direction}`;
-                  const lastSpoken = alertDebounceMapRef.current.get(alertKey) || 0;
-
-                  if (currentTime - lastSpoken >= 4000) {
-                    alertDebounceMapRef.current.set(alertKey, currentTime);
-                    candidatesToSpeak.push({
-                      className: item.className,
-                      direction: item.direction,
-                      distanceLabel: item.distanceLabel,
-                    });
-                    if (candidatesToSpeak.length >= 2) break;
-                  }
-                }
-
-                if (candidatesToSpeak.length > 0) {
-                  const speechAlert =
-                    candidatesToSpeak.length === 1
-                      ? `${candidatesToSpeak[0].className} ${candidatesToSpeak[0].direction}`
-                      : `${candidatesToSpeak[0].className} ${candidatesToSpeak[0].direction} and ${candidatesToSpeak[1].className} ${candidatesToSpeak[1].direction}`;
-
-                  const nearestLabel = candidatesToSpeak[0].distanceLabel;
-                  const priority =
-                    nearestLabel === 'very close'
-                      ? SpeechPriority.URGENT_OBSTACLE
-                      : SpeechPriority.STATUS;
-
-                  speechQueue.speak(speechAlert, priority);
-                  audioFeedback.playProximityAlert(nearestLabel);
-                }
-              } else {
-                updateLiveDetections([]);
-              }
+            // Mark nearest object
+            if (nearestItemIdx !== -1 && liveItems[nearestItemIdx]) {
+              liveItems[nearestItemIdx].isNearest = true;
             }
-          } catch (detectionErr) {
-            console.warn('Detection execution error:', detectionErr);
+
+            // Update live detections in store
+            updateLiveDetections(liveItems);
+
+            // Proximity speech alerts & directional audio feedback for multi-objects
+            if (liveItems.length > 0) {
+              const currentTime = Date.now();
+              const candidatesToSpeak: Array<{
+                className: string;
+                direction: string;
+                distanceLabel: 'very close' | 'close' | 'far';
+              }> = [];
+
+              // Priority sorting:
+              // 1) Urgency of distance (very close > close > far)
+              // 2) Boost non-person objects so everyday items aren't suppressed by a visible person
+              const sorted = [...liveItems].sort((a, b) => {
+                const getScore = (item: LiveDetectionItem) => {
+                  const distW = item.distanceLabel === 'very close' ? 30 : item.distanceLabel === 'close' ? 20 : 10;
+                  const nonPersonBoost = item.className.toLowerCase() !== 'person' ? 6 : 0;
+                  return distW + nonPersonBoost + item.confidence * 4;
+                };
+                return getScore(b) - getScore(a);
+              });
+
+              for (const item of sorted) {
+                // If speakFarObjects is false, skip distant person when other closer objects exist
+                if (item.distanceLabel === 'far' && !speakFarObjects && item.className.toLowerCase() === 'person' && sorted.some((s) => s.className.toLowerCase() !== 'person' || s.distanceLabel !== 'far')) {
+                  continue;
+                }
+
+                const alertKey = `${item.className}_${item.direction}`;
+                const lastSpoken = alertDebounceMapRef.current.get(alertKey) || 0;
+
+                if (currentTime - lastSpoken >= 3500) {
+                  alertDebounceMapRef.current.set(alertKey, currentTime);
+                  candidatesToSpeak.push({
+                    className: item.className,
+                    direction: item.direction,
+                    distanceLabel: item.distanceLabel,
+                  });
+                  if (candidatesToSpeak.length >= 2) break;
+                }
+              }
+
+              if (candidatesToSpeak.length > 0) {
+                const formatName = (str: string) => str.replace(/_/g, ' ');
+                const speechAlert =
+                  candidatesToSpeak.length === 1
+                    ? `${formatName(candidatesToSpeak[0].className)} ${candidatesToSpeak[0].direction}`
+                    : `${formatName(candidatesToSpeak[0].className)} ${candidatesToSpeak[0].direction}, and ${formatName(candidatesToSpeak[1].className)} ${candidatesToSpeak[1].direction}`;
+
+                const nearestLabel = candidatesToSpeak[0].distanceLabel;
+                const priority =
+                  nearestLabel === 'very close'
+                    ? SpeechPriority.URGENT_OBSTACLE
+                    : SpeechPriority.STATUS;
+
+                speechQueue.speak(speechAlert, priority);
+                audioFeedback.playProximityAlert(nearestLabel);
+              }
+            } else {
+              updateLiveDetections([]);
+            }
           }
+        } catch (detectionErr) {
+          console.warn('Detection execution error:', detectionErr);
         }
       }
     }

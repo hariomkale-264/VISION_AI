@@ -180,8 +180,9 @@ export const useStatsStore = create<StatsState>()(
       },
 
       recordObjectDetection: (className, bbox, confidence, direction = 'ahead', distanceText = '2.1 m') => {
-        // Only count detections with confidence of 0.5 or higher
-        if (confidence < 0.5) {
+        // Count detections with confidence of 0.20 or higher (or 0.25 for person)
+        const minConf = className.toLowerCase() === 'person' ? 0.25 : 0.20;
+        if (confidence < minConf) {
           return false;
         }
 

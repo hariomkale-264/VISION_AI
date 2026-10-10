@@ -245,7 +245,7 @@ export const useAppStore = create<AppState>()(
       setDetectionActive: (detectionActive) => set({ detectionActive }),
       modelType: 'mobilenet_v2',
       setModelType: (modelType) => set({ modelType }),
-      confidenceThreshold: 0.5,
+      confidenceThreshold: 0.35,
       setConfidenceThreshold: (confidenceThreshold) => set({ confidenceThreshold }),
       speakFarObjects: false,
       setSpeakFarObjects: (speakFarObjects) => set({ speakFarObjects }),

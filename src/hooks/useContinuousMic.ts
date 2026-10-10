@@ -54,6 +54,7 @@ export function useContinuousMic() {
 
       console.log('[VISION_AI Speech Heard]', transcript);
       setLastTranscript(transcript);
+      setLastErrorDebug(null);
 
       // Don't process while assistant is speaking
       if (useAppStore.getState().isSpeaking) {
@@ -182,39 +183,35 @@ export function useContinuousMic() {
         const errType = event.error;
         console.error('[SpeechRecognition Error]', errType, event);
 
+        // Requirement 5: Never show error banner or announce for no-speech in continuous mode
+        if (errType === 'no-speech') {
+          return;
+        }
+
         let spokenMessage = '';
         let debugLine = `SpeechRecognition error: ${errType}`;
 
         switch (errType) {
           case 'network':
             spokenMessage = 'Speech service is not reachable. Please use Chrome and allow the microphone.';
-            debugLine = 'Speech service is not reachable. Please use Chrome and allow the microphone.';
+            debugLine = 'Speech service is not reachable. Please check network connection.';
             break;
           case 'not-allowed':
             spokenMessage = 'Microphone permission is blocked.';
-            debugLine = 'Microphone permission is blocked.';
-            break;
-          case 'no-speech':
-            spokenMessage = 'I did not hear anything, please try again.';
-            debugLine = 'I did not hear anything, please try again.';
+            debugLine = 'Microphone permission is blocked. Please allow microphone access.';
             break;
           default:
             if (typeof navigator !== 'undefined' && !navigator.onLine) {
               spokenMessage = 'You are offline.';
               debugLine = 'You are offline.';
             } else {
-              spokenMessage = `Microphone notice: ${errType}`;
-              debugLine = `Microphone notice: ${errType}`;
+              return;
             }
             break;
         }
 
         setLastErrorDebug(debugLine);
-
-        // Only announce audible warning if it's not silent no-speech
-        if (errType !== 'no-speech') {
-          speechQueue.speak(spokenMessage, SpeechPriority.ASSISTANT_REPLY);
-        }
+        speechQueue.speak(spokenMessage, SpeechPriority.ASSISTANT_REPLY);
       };
 
       recognition.onend = () => {
