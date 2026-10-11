@@ -189,6 +189,8 @@ interface AppState {
   setVoiceDebugPanel: (val: boolean) => void;
   wakeLockActive: boolean;
   setWakeLockActive: (val: boolean) => void;
+  selfTestOpen: boolean;
+  setSelfTestOpen: (val: boolean) => void;
 
   // Aria announcements
   ariaLiveMessage: string;
@@ -370,6 +372,8 @@ export const useAppStore = create<AppState>()(
       setVoiceDebugPanel: (voiceDebugPanel) => set({ voiceDebugPanel }),
       wakeLockActive: false,
       setWakeLockActive: (wakeLockActive) => set({ wakeLockActive }),
+      selfTestOpen: false,
+      setSelfTestOpen: (selfTestOpen) => set({ selfTestOpen }),
 
       ariaLiveMessage: '',
       announceAria: (msg) => set({ ariaLiveMessage: msg }),

@@ -9,7 +9,13 @@ import { speechQueue, SpeechPriority } from './speechQueue';
 import { handleEmergencySos } from './intentRouter';
 import { describeSurroundings, readTextFromImage } from './gemini';
 import { getApiKey, notifyApiKeyMissing } from './apiKey';
-import { openGoogleMaps, handleTravelModeAnswer } from './navigationService';
+import {
+  openGoogleMaps,
+  handleTravelModeAnswer,
+  startNavigation,
+  extractDestination,
+  speak,
+} from './navigationService';
 
 // Snapshot getter and mic controllers registered by components
 let snapshotProvider: (() => string | null) | null = null;
@@ -108,11 +114,6 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
     },
     keywords: {
       en: [
-        'navigation',
-        'navigate',
-        'map',
-        'maps',
-        'gps',
         'open navigation',
         'show navigation',
         'navigation tab',
@@ -122,8 +123,8 @@ export const TAB_ROUTES: TabRouteDefinition[] = [
         'map tab',
         'view map',
       ],
-      hi: ['नेविगेशन', 'नक्शा', 'रास्ता दिखाओ', 'नेविगेशन खोलें', 'नेविगेशन टैब'],
-      mr: ['नेव्हिगेशन', 'नकाशा', 'मार्ग दाखवा', 'नकाशा उघडा', 'नेव्हिगेशन टॅब'],
+      hi: ['नेविगेशन खोलें', 'नेविगेशन टैब', 'नक्शा खोलें'],
+      mr: ['नेव्हिगेशन उघडा', 'नेव्हिगेशन टॅब', 'नकाशा उघडा'],
     },
   },
   {
@@ -549,14 +550,93 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
   }
 
   // -----------------------------------------------------------------
-  // 1. TAB SWITCHING (FIX 1: Checked BEFORE Navigation!)
-  // Requirement:
-  // - Before checking for navigation, remove the words "tab", "screen", "page",
-  //   "section", "window", and the Hindi/Marathi equivalents (टैब, स्क्रीन, पेज, विभाग) from the sentence.
-  // - Then check whether the remaining text matches a tab keyword
-  //   (dashboard, detection, navigation, voice, emergency, settings and their Hindi/Marathi versions).
-  // - If yes, switch the tab. Only treat the sentence as a destination if it does NOT match any tab.
-  // - "go to the voice tab", "open settings page", "show the detection screen" must switch tabs and never open Google Maps.
+  // STEP 3 Check 1: FIRST check: Is window.isWaitingForDestination === true?
+  // If yes: window.isWaitingForDestination = false; startNavigation(spokenText); return;
+  // -----------------------------------------------------------------
+  const isWaiting =
+    (typeof window !== 'undefined' && (window as any).isWaitingForDestination === true) ||
+    app.isPendingDestination;
+
+  if (isWaiting) {
+    if (typeof window !== 'undefined') {
+      (window as any).isWaitingForDestination = false;
+    }
+    app.setIsPendingDestination(false);
+    console.log('[VoiceRouter] Handling pending destination answer:', rawText);
+    await startNavigation(rawText);
+    return {
+      matched: true,
+      commandName: 'navigate_destination',
+      spokenReply: `Starting navigation to ${rawText.trim()}`,
+    };
+  }
+
+  // -----------------------------------------------------------------
+  // STEP 3 Check 2 & 3: Navigation Intent vs Tab Switching
+  // 2. SECOND check: Does the sentence contain ANY navigation phrase?
+  //    ("navigate to", "take me to", "directions to", "go to", "how do I get to", etc.)
+  //    If yes: CALL startNavigation(spokenText) DIRECTLY. DO NOT just switch tabs.
+  // 3. ONLY IF it's purely "open navigation" or "navigation tab" (NO destination specified):
+  //    Then switch tab AND speak "Where do you want to go?", setting window.isWaitingForDestination = true.
+  // -----------------------------------------------------------------
+  const extracted = extractDestination(rawText);
+  const hasNavPhrase =
+    extracted !== null ||
+    /\b(?:navigate|navigation|take me|directions?|route|guide me|walk me|drive me)\b/i.test(rawText) ||
+    /\b(?:i want to|i wanna|i need to)\s+(?:go|reach|get)\b/i.test(rawText) ||
+    /\bhow\s+(?:do i|can i|to)\s+(?:reach|get to)\b/i.test(rawText) ||
+    /ले\s+चलो|जाना\s+है|का\s+रास्ता|जायचं\s+आहे/i.test(rawText);
+
+  // Helper: check if extracted target refers to an application tab rather than a real destination
+  const isOtherTabTarget = (destStr: string): ActiveTab | null => {
+    const s = destStr.toLowerCase().replace(/\b(tab|screen|page|section|window)\b/g, '').trim();
+    if (['dashboard', 'home', 'main'].includes(s)) return 'dashboard';
+    if (['detection', 'detect', 'camera', 'vision'].includes(s)) return 'detection';
+    if (['voice', 'assistant', 'mic'].includes(s)) return 'voice';
+    if (['emergency', 'sos', 'help'].includes(s)) return 'emergency';
+    if (['settings', 'setting', 'preferences'].includes(s)) return 'settings';
+    return null;
+  };
+
+  const otherTab = extracted ? isOtherTabTarget(extracted) : null;
+
+  if (hasNavPhrase && !otherTab) {
+    // 3. ONLY IF it's purely "open navigation" or "navigation tab" (NO destination specified)
+    const isPureNavTab =
+      /^(?:please\s+)?(?:open\s+|show\s+|view\s+|switch\s+to\s+|go\s+to\s+)?(?:the\s+)?navigation(?:\s+(?:tab|screen|page|window))?$/i.test(cleaned) ||
+      /^(?:please\s+)?(?:open\s+|show\s+|view\s+|switch\s+to\s+|go\s+to\s+)?(?:the\s+)?(?:map|maps)(?:\s+(?:tab|screen|page|window))?$/i.test(cleaned) ||
+      /^(?:please\s+)?(?:navigate|directions)$/i.test(cleaned) ||
+      /^(?:नेविगेशन|नेव्हिगेशन|नक्शा|नकाशा)(?:\s+(?:टैब|टॅब|स्क्रीन|पेज))?$/i.test(cleaned);
+
+    if (isPureNavTab || !extracted) {
+      app.setActiveTab('navigation');
+      const askText = 'Where do you want to go?';
+      await speak(askText);
+      if (typeof window !== 'undefined') {
+        window.isWaitingForDestination = true;
+      }
+      app.setIsPendingDestination(true);
+      app.setLastTranscript(rawText.trim());
+      stats.recordVoiceCommandSuccess(rawText.trim() || 'open navigation', askText);
+      return {
+        matched: true,
+        commandName: 'navigate_ask',
+        spokenReply: askText,
+      };
+    }
+
+    // Destination IS present: Call startNavigation directly!
+    console.log('[VoiceRouter] Direct voice navigation triggered with:', rawText);
+    await startNavigation(rawText);
+    return {
+      matched: true,
+      commandName: 'start_navigation',
+      spokenReply: `Starting navigation to ${extracted}`,
+    };
+  }
+
+  // -----------------------------------------------------------------
+  // 4. TAB SWITCHING (For other tabs: dashboard, detection, voice, emergency, settings)
   // -----------------------------------------------------------------
   const tabCheck = matchTabFromSpeech(rawText);
   if (tabCheck.isTab && tabCheck.tab) {
@@ -578,8 +658,9 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
     };
   }
 
-  // Also check standard TAB_ROUTES for direct keyword matches
+  // Standard TAB_ROUTES for direct keyword matches (excluding navigation handled above)
   for (const route of TAB_ROUTES) {
+    if (route.tab === 'navigation') continue;
     let matchedLang: 'en' | 'hi' | 'mr' | null = null;
 
     if (matchesAnyKeyword(cleaned, route.keywords.en)) {
@@ -620,82 +701,35 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
   }
 
   // -----------------------------------------------------------------
-  // 2. NAVIGATION DESTINATION INTENT (Only treated as destination if it does NOT match any tab!)
-  // -----------------------------------------------------------------
-
-  // If user was previously asked "Where do you want to go?"
-  if (app.isPendingDestination) {
-    app.setIsPendingDestination(false);
-    let pendingDest = cleanSpokenText(rawText);
-    let changed = true;
-    while (changed) {
-      const prev = pendingDest;
-      pendingDest = pendingDest.replace(/^(?:please|the|nearest|a|an)\s+/i, '').trim();
-      changed = prev !== pendingDest;
-    }
-    pendingDest = pendingDest.replace(/[.,?!]+$/, '').trim();
-
-    if (pendingDest.length > 0) {
-      await openGoogleMaps(pendingDest, { heardText: rawText.trim() });
-      return {
-        matched: true,
-        commandName: 'navigate_destination',
-        spokenReply: `Opening Google Maps to ${pendingDest}`,
-      };
-    }
-  }
-
-  // Parse navigation intent from current transcript
-  const navParsed = parseNavigationIntent(rawText);
-  if (navParsed.isNavIntent) {
-    if (navParsed.isEmpty || !navParsed.destination) {
-      app.setIsPendingDestination(true);
-      const askText = 'Where do you want to go?';
-      speechQueue.speak(askText, SpeechPriority.ASSISTANT_REPLY);
-      app.setLastTranscript(rawText.trim());
-      stats.recordVoiceCommandSuccess(rawText.trim() || 'navigate', askText);
-      return {
-        matched: true,
-        commandName: 'navigate_ask',
-        spokenReply: askText,
-      };
-    }
-
-    const dest = navParsed.destination;
-    const travelmode = navParsed.travelmode;
-
-    // Safety check: if destination accidentally contains a tab keyword (e.g. detection, voice, dashboard)
-    const safetyTabCheck = matchTabFromSpeech(dest);
-    if (safetyTabCheck.isTab && safetyTabCheck.tab) {
-      app.setActiveTab(safetyTabCheck.tab);
-      const confirmReply = safetyTabCheck.confirmation || `Opening ${safetyTabCheck.tab}`;
-      speechQueue.speak(confirmReply, SpeechPriority.STATUS);
-      app.setLastTranscript(rawText.trim());
-      stats.recordVoiceCommandSuccess(`switch to ${safetyTabCheck.tab}`, confirmReply);
-      return {
-        matched: true,
-        commandName: `switch_to_${safetyTabCheck.tab}`,
-        spokenReply: confirmReply,
-      };
-    }
-
-    // Use openGoogleMaps everywhere (never window.open)
-    await openGoogleMaps(dest, {
-      explicitMode: travelmode,
-      origin: navParsed.origin,
-      heardText: rawText.trim(),
-    });
-
-    return {
-      matched: true,
-      commandName: 'navigate_destination',
-      spokenReply: `Opening Google Maps to ${dest}`,
-    };
-  }
-
-  // -----------------------------------------------------------------
   // 2. LOCAL ACTION COMMANDS
   // -----------------------------------------------------------------
+
+  // Self-Test Trigger ("run self test", "check everything", "self test", "test everything", "run system check", "system check")
+  if (
+    matchesAnyKeyword(cleaned, [
+      'run self test',
+      'self test',
+      'check everything',
+      'test everything',
+      'run system check',
+      'system check',
+      'start self test',
+      'सेल्फ टेस्ट',
+      'सब कुछ चेक करो',
+      'तपासा',
+    ])
+  ) {
+    app.setSelfTestOpen(true);
+    const reply = currentLang.startsWith('hi')
+      ? 'सिस्टम सेल्फ टेस्ट शुरू कर रहे हैं'
+      : currentLang.startsWith('mr')
+      ? 'सिस्टम सेल्फ टेस्ट सुरू करत आहे'
+      : 'Starting system self test';
+    speechQueue.speak(reply, SpeechPriority.STATUS);
+    app.setLastTranscript(rawText.trim());
+    stats.recordVoiceCommandSuccess(rawText.trim() || 'run self test', reply);
+    return { matched: true, commandName: 'self_test', spokenReply: reply };
+  }
 
   // Start Detection
   if (
@@ -930,6 +964,7 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
       'read text',
       'read this',
       'what does it say',
+      'what does this say',
       'read sign',
       'पढ़ो',
       'यह क्या लिखा है',
@@ -1131,4 +1166,48 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
 
   // No local command matched
   return { matched: false };
+}
+
+/**
+ * Offline intent & destination parser for Self-Test check #5 without hardware access.
+ */
+export function parseCommandIntentOffline(rawText: string): { intent: string; destination?: string } {
+  const cleaned = cleanSpokenText(rawText);
+  const dest = extractDestination(rawText);
+  if (dest) {
+    return { intent: 'navigation', destination: dest.toLowerCase() };
+  }
+  if (
+    matchesAnyKeyword(cleaned, [
+      'read text',
+      'read this',
+      'what does it say',
+      'what does this say',
+      'read sign',
+      'पढ़ो',
+      'यह क्या लिखा है',
+      'वाचा',
+      'काय लिहिले आहे',
+    ])
+  ) {
+    return { intent: 'read_text' };
+  }
+  if (
+    matchesAnyKeyword(cleaned, [
+      'what is in front of me',
+      'describe scene',
+      'describe surroundings',
+      'what is ahead',
+      'what do you see',
+      'describe what you see',
+      'start detection',
+      'detect objects',
+      'सामने क्या है',
+      'आगे क्या है',
+      'समोर काय आहे',
+    ])
+  ) {
+    return { intent: 'object_detection' };
+  }
+  return { intent: 'unknown' };
 }

@@ -11,6 +11,8 @@ import {
   GEMINI_FALLBACK_MODEL,
 } from './apiKey';
 
+export { GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODEL };
+
 export interface GeminiVoiceResponse {
   transcript: string;
   language: string;

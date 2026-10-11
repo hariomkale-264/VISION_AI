@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
 import { routeVoiceCommand, registerVoiceRouterProviders } from '../services/voiceRouter';
@@ -12,7 +12,7 @@ import { getApiKey, notifyApiKeyMissing } from '../services/apiKey';
 import { audioFeedback } from '../services/audioFeedback';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
 
-// Cross-browser SpeechRecognition
+// Cross-browser SpeechRecognition constructor
 const SpeechRecognitionAPI =
   typeof window !== 'undefined'
     ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -30,22 +30,29 @@ export function useContinuousMic() {
   const announceAria = useAppStore((s) => s.announceAria);
   const language = useAppStore((s) => s.language);
 
-  // References
+  // Requirement 3: ONE SpeechRecognition instance only, kept in a ref
   const recognitionRef = useRef<any>(null);
-  const isExplicitlyStoppedRef = useRef(false);
-  const restartTimeoutRef = useRef<any>(null);
-  const lastStartTimeRef = useRef<number>(0);
-  const quickRetriesCountRef = useRef<number>(0);
 
-  // AudioContext for live waveform visualizer
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
+  // Requirement 3: State flags: isListening, isSpeaking, isStarting
+  const isListeningRef = useRef<boolean>(false);
+  const isSpeakingRef = useRef<boolean>(false);
+  const isStartingRef = useRef<boolean>(false);
+  const isExplicitlyStoppedRef = useRef<boolean>(false);
+
+  // Error tracking & backoff
+  const consecutiveErrorCountRef = useRef<number>(0);
+  const restartTimerRef = useRef<any>(null);
   const animFrameRef = useRef<number | null>(null);
+
+  // User gesture state for prompt and recovery button
+  const [needsUserGesture, setNeedsUserGesture] = useState<boolean>(() => {
+    // If not previously granted or gestured in this session
+    return typeof window !== 'undefined' && !sessionStorage.getItem('vision_ai_mic_gestured');
+  });
 
   /**
    * Dispatches speech transcript to Local Command Router first,
-   * and falls back to Gemini general question if no local command matches.
+   * then falls back to Gemini general query if no local command matches.
    */
   const handleRecognizedSpeech = useCallback(
     async (rawTranscript: string) => {
@@ -56,12 +63,12 @@ export function useContinuousMic() {
       setLastTranscript(transcript);
       setLastErrorDebug(null);
 
-      // Don't process while assistant is speaking
-      if (useAppStore.getState().isSpeaking) {
+      // Never process speech if assistant is speaking
+      if (useAppStore.getState().isSpeaking || isSpeakingRef.current) {
         return;
       }
 
-      // 1. Try Local Command Router first (works offline without Gemini and with no key!)
+      // 1. Try Local Command Router first (works completely offline with 0 API keys)
       try {
         const localResult = await routeVoiceCommand(transcript);
         if (localResult.matched) {
@@ -97,7 +104,7 @@ export function useContinuousMic() {
         return;
       }
 
-      // 4. Send to Gemini as a general question
+      // 4. Send to Gemini as a general query
       setIsProcessingAudio(true);
       try {
         const app = useAppStore.getState();
@@ -129,7 +136,7 @@ export function useContinuousMic() {
         stats.recordVoiceCommandSuccess(transcript.trim() || 'general_question', reply);
         setLastErrorDebug(null);
       } catch (geminiErr: any) {
-        const { spoken, debug } = formatSpecificError(geminiErr);
+        const { spoken } = formatSpecificError(geminiErr);
         speechQueue.speak(spoken, SpeechPriority.ASSISTANT_REPLY);
       } finally {
         setIsProcessingAudio(false);
@@ -139,216 +146,362 @@ export function useContinuousMic() {
   );
 
   /**
-   * Initializes or re-initializes SpeechRecognition
+   * Requirement 3: Safe start on the single SpeechRecognition instance
    */
-  const startSpeechRecognition = useCallback(() => {
+  const safeStartRecognition = useCallback(() => {
     if (!SpeechRecognitionAPI) {
       const err = 'Speech recognition not supported in this browser. Please use Google Chrome.';
       console.error(err);
       setLastErrorDebug(err);
+      setMicStatus('error');
       return;
     }
 
-    try {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch (_) {}
-        recognitionRef.current = null;
-      }
-
-      const recognition = new SpeechRecognitionAPI();
-      recognition.continuous = true;
-      recognition.interimResults = false;
-      recognition.lang = language || 'en-US';
-
-      recognition.onstart = () => {
-        lastStartTimeRef.current = Date.now();
-        setMicStatus('listening');
-        announceAria('Microphone listening');
-      };
-
-      recognition.onresult = (event: any) => {
-        const lastIndex = event.results.length - 1;
-        if (lastIndex >= 0) {
-          const result = event.results[lastIndex];
-          if (result && result[0]) {
-            const transcript = result[0].transcript;
-            handleRecognizedSpeech(transcript);
-          }
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        const errType = event.error;
-        console.error('[SpeechRecognition Error]', errType, event);
-
-        // Requirement 5: Never show error banner or announce for no-speech in continuous mode
-        if (errType === 'no-speech') {
-          return;
-        }
-
-        let spokenMessage = '';
-        let debugLine = `SpeechRecognition error: ${errType}`;
-
-        switch (errType) {
-          case 'network':
-            spokenMessage = 'Speech service is not reachable. Please use Chrome and allow the microphone.';
-            debugLine = 'Speech service is not reachable. Please check network connection.';
-            break;
-          case 'not-allowed':
-            spokenMessage = 'Microphone permission is blocked.';
-            debugLine = 'Microphone permission is blocked. Please allow microphone access.';
-            break;
-          default:
-            if (typeof navigator !== 'undefined' && !navigator.onLine) {
-              spokenMessage = 'You are offline.';
-              debugLine = 'You are offline.';
-            } else {
-              return;
-            }
-            break;
-        }
-
-        setLastErrorDebug(debugLine);
-        speechQueue.speak(spokenMessage, SpeechPriority.ASSISTANT_REPLY);
-      };
-
-      recognition.onend = () => {
-        if (isExplicitlyStoppedRef.current) {
-          setMicStatus('paused');
-          return;
-        }
-
-        const runDuration = Date.now() - lastStartTimeRef.current;
-        if (runDuration < 2000) {
-          quickRetriesCountRef.current += 1;
-        } else {
-          quickRetriesCountRef.current = 0;
-        }
-
-        // Limit of 3 quick retries before announcing problem
-        if (quickRetriesCountRef.current > 3) {
-          const problemMsg = 'Speech service stopped repeatedly. Please check Chrome microphone permissions.';
-          console.error(problemMsg);
-          setLastErrorDebug('Repeated speech recognition failure (3 quick stops)');
-          speechQueue.speak(problemMsg, SpeechPriority.ASSISTANT_REPLY);
-          setMicStatus('error');
-          return;
-        }
-
-        // Auto-restart after 500 ms (continuous listening)
-        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
-        restartTimeoutRef.current = setTimeout(() => {
-          if (!isExplicitlyStoppedRef.current) {
-            try {
-              recognition.start();
-            } catch (_) {
-              startSpeechRecognition();
-            }
-          }
-        }, 500);
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (e: any) {
-      console.error('Failed to start speech recognition:', e);
-      setLastErrorDebug(String(e.message || e));
-      setMicStatus('error');
+    if (isExplicitlyStoppedRef.current) {
+      console.log('[Mic] Not starting: explicitly stopped by user');
+      return;
     }
-  }, [language, setMicStatus, announceAria, handleRecognizedSpeech, setLastErrorDebug]);
+
+    if (isSpeakingRef.current || useAppStore.getState().isSpeaking) {
+      console.log('[Mic] Not starting: app is speaking');
+      return;
+    }
+
+    if (isListeningRef.current || isStartingRef.current) {
+      return;
+    }
+
+    const rec = recognitionRef.current;
+    if (!rec) return;
+
+    isStartingRef.current = true;
+    try {
+      rec.start();
+      console.log('[Mic] recognition.start() called');
+    } catch (err: any) {
+      isStartingRef.current = false;
+      // Requirement 3: wrap in try/catch and ignore "InvalidStateError"
+      if (err?.name === 'InvalidStateError' || String(err?.message || err).includes('InvalidStateError')) {
+        console.log('[Mic] Ignored InvalidStateError: recognition already running or starting');
+      } else {
+        console.warn('[Mic] Unexpected start error:', err);
+      }
+    }
+  }, [setLastErrorDebug, setMicStatus]);
 
   /**
-   * Initializes audio context and analyser for live waveform level animation
+   * Requirement 2: Request mic permission first on user gesture
    */
-  const startAudioWaveformMonitor = useCallback(async () => {
+  const requestMicPermissionAndStart = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      console.log('[Mic] Requesting getUserMedia permission with audio: true...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      console.log('[Mic] Microphone permission confirmed via user gesture.');
 
-      mediaStreamRef.current = stream;
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioCtx();
-      audioContextRef.current = audioCtx;
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('vision_ai_mic_gestured', 'true');
+      }
+      setNeedsUserGesture(false);
+      isExplicitlyStoppedRef.current = false;
+      consecutiveErrorCountRef.current = 0;
+      setLastErrorDebug(null);
 
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-      const checkLevel = () => {
-        if (!analyserRef.current) return;
-        analyserRef.current.getByteFrequencyData(dataArray);
-
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
-        }
-        const avg = sum / dataArray.length;
-        const normalized = Math.min(1, avg / 80);
-
-        if (useAppStore.getState().isSpeaking) {
-          setMicLevel(0);
-        } else {
-          setMicLevel(normalized);
-        }
-
-        animFrameRef.current = requestAnimationFrame(checkLevel);
-      };
-
-      checkLevel();
+      audioFeedback.playMicStart();
+      safeStartRecognition();
     } catch (err: any) {
-      console.warn('Audio level monitor error:', err);
+      console.error('[Mic] getUserMedia permission error:', err);
+      setMicStatus('error');
+      setNeedsUserGesture(true);
+      const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+      if (isIframe) {
+        const msg = 'Microphone access failed. In preview mode, voice control may not work inside an iframe. Open in a new tab or tap to try again.';
+        setLastErrorDebug('In iframe: Microphone permission restricted. Open in a new tab.');
+        speechQueue.speak(msg, SpeechPriority.URGENT_OBSTACLE);
+      } else {
+        const msg = 'Microphone permission is blocked. Please allow microphone access in browser settings.';
+        setLastErrorDebug(msg);
+        speechQueue.speak(msg, SpeechPriority.URGENT_OBSTACLE);
+      }
     }
+  }, [safeStartRecognition, setLastErrorDebug, setMicStatus]);
+
+  /**
+   * Requirement 3: Build the single SpeechRecognition instance once
+   */
+  useEffect(() => {
+    if (!SpeechRecognitionAPI) {
+      setLastErrorDebug('Speech recognition not supported in this browser. Please use Chrome.');
+      setMicStatus('error');
+      return;
+    }
+
+    if (recognitionRef.current) {
+      return; // Already initialized single instance
+    }
+
+    const recognition = new SpeechRecognitionAPI();
+
+    // Requirement 3 settings:
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-IN';
+    recognition.maxAlternatives = 3;
+
+    recognition.onstart = () => {
+      console.log('[Mic] recognition onstart event fired');
+      isStartingRef.current = false;
+      isListeningRef.current = true;
+      setMicStatus('listening');
+      announceAria('Microphone listening');
+    };
+
+    // Requirement 3: Reset error counter on successful result
+    recognition.onresult = (event: any) => {
+      consecutiveErrorCountRef.current = 0;
+      const lastIndex = event.results.length - 1;
+      if (lastIndex >= 0) {
+        const result = event.results[lastIndex];
+        if (result && result[0]) {
+          const transcript = result[0].transcript;
+          handleRecognizedSpeech(transcript);
+        }
+      }
+    };
+
+    // Requirement 1: Handle recognition.onerror with real error value and announcements
+    recognition.onerror = (event: any) => {
+      const err = event.error;
+      console.error('[SpeechRecognition onerror]', err, event);
+      setLastErrorDebug(`event.error: ${err}`);
+
+      // no-speech / aborted: do NOT count as failures; just restart quietly
+      if (err === 'no-speech' || err === 'aborted') {
+        return;
+      }
+
+      // Count real error
+      consecutiveErrorCountRef.current += 1;
+
+      const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+      if (err === 'not-allowed' || err === 'service-not-allowed') {
+        setMicStatus('error');
+        setNeedsUserGesture(true);
+        if (isIframe) {
+          setLastErrorDebug('In iframe: Microphone permission restricted. Open in a new tab.');
+          speechQueue.speak(
+            'Microphone permission is restricted in preview mode. Open in a new tab or tap to retry.',
+            SpeechPriority.URGENT_OBSTACLE
+          );
+        } else {
+          speechQueue.speak(
+            'Microphone permission is blocked. Please allow microphone access in browser settings.',
+            SpeechPriority.URGENT_OBSTACLE
+          );
+        }
+      } else if (err === 'audio-capture') {
+        setMicStatus('error');
+        setNeedsUserGesture(true);
+        speechQueue.speak(
+          "I can't access the microphone. Please close other apps using it.",
+          SpeechPriority.URGENT_OBSTACLE
+        );
+      } else if (err === 'network') {
+        setMicStatus('error');
+        speechQueue.speak('Speech recognition needs internet.', SpeechPriority.URGENT_OBSTACLE);
+      }
+    };
+
+    // Requirement 3: in onend, restart after 800-1000 ms using setTimeout (never instantly)
+    recognition.onend = () => {
+      console.log('[Mic] recognition onend event fired');
+      isStartingRef.current = false;
+      isListeningRef.current = false;
+
+      if (isExplicitlyStoppedRef.current) {
+        setMicStatus('paused');
+        return;
+      }
+
+      // Never run recognition and speechSynthesis at the same time
+      if (isSpeakingRef.current || useAppStore.getState().isSpeaking) {
+        return;
+      }
+
+      // Requirement 3: Do NOT give up permanently after 3 quick stops!
+      // Show a big "Tap to enable voice" button and speak "Tap the screen to restart voice control" instead.
+      if (consecutiveErrorCountRef.current >= 3) {
+        setMicStatus('error');
+        setNeedsUserGesture(true);
+        const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+        if (isIframe) {
+          setLastErrorDebug('In iframe: Voice control interrupted in preview mode. Open in a new tab.');
+          speechQueue.speak(
+            'Voice control was interrupted in preview mode. Tap open in a new tab or tap to restart.',
+            SpeechPriority.ASSISTANT_REPLY
+          );
+        } else {
+          speechQueue.speak('Tap the screen to restart voice control', SpeechPriority.ASSISTANT_REPLY);
+        }
+        return;
+      }
+
+      // Exponential backoff on real errors (1s, 2s, 4s)
+      let delay = 900; // default 800-1000 ms
+      if (consecutiveErrorCountRef.current > 0) {
+        delay = Math.min(4000, 1000 * Math.pow(2, consecutiveErrorCountRef.current - 1));
+      }
+
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = setTimeout(() => {
+        if (!isExplicitlyStoppedRef.current && !isSpeakingRef.current) {
+          safeStartRecognition();
+        }
+      }, delay);
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      try {
+        recognition.abort();
+      } catch (_) {}
+      recognitionRef.current = null;
+    };
+  }, [handleRecognizedSpeech, safeStartRecognition, announceAria, setLastErrorDebug, setMicStatus]);
+
+  /**
+   * Requirement 4: Avoid conflicts with text-to-speech
+   * - Before speaking: recognition.abort() and set isSpeaking = true
+   * - After utterance.onend: wait 500 ms, then restart recognition
+   * - Never run recognition and speechSynthesis at the same time
+   */
+  useEffect(() => {
+    speechQueue.registerSpeechCoordination(
+      // onBeforeSpeaking
+      () => {
+        isSpeakingRef.current = true;
+        if (restartTimerRef.current) {
+          clearTimeout(restartTimerRef.current);
+          restartTimerRef.current = null;
+        }
+        if (recognitionRef.current && isListeningRef.current) {
+          try {
+            recognitionRef.current.abort();
+          } catch (_) {}
+        }
+        isListeningRef.current = false;
+        isStartingRef.current = false;
+      },
+      // onAfterSpeaking (already runs after 500ms delay in speechQueue)
+      () => {
+        isSpeakingRef.current = false;
+        if (!isExplicitlyStoppedRef.current && !needsUserGesture) {
+          safeStartRecognition();
+        }
+      }
+    );
+  }, [safeStartRecognition, needsUserGesture]);
+
+  /**
+   * Requirement 6: Resume handling
+   * When the app becomes visible again (e.g. after returning from Google Maps),
+   * restart recognition after 1 second.
+   */
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        console.log('[Mic] App became visible again, checking recognition...');
+        if (!isExplicitlyStoppedRef.current && !needsUserGesture) {
+          setTimeout(() => {
+            if (!isSpeakingRef.current && !isListeningRef.current && !needsUserGesture) {
+              safeStartRecognition();
+            }
+          }, 1000);
+        }
+      }
+    };
+
+    const handleWindowFocus = () => {
+      if (
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'visible' &&
+        !isExplicitlyStoppedRef.current &&
+        !isListeningRef.current &&
+        !isSpeakingRef.current &&
+        !needsUserGesture
+      ) {
+        setTimeout(() => {
+          if (!needsUserGesture) {
+            safeStartRecognition();
+          }
+        }, 1000);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [safeStartRecognition, needsUserGesture]);
+
+  /**
+   * Waveform monitor level simulation for smooth visualizer without audio hardware locking
+   */
+  useEffect(() => {
+    const updateLevel = () => {
+      if (isListeningRef.current && !isSpeakingRef.current) {
+        // Subtle active breathing waveform
+        const pulse = 0.35 + 0.3 * Math.sin(Date.now() / 250);
+        setMicLevel(pulse);
+      } else {
+        setMicLevel(0);
+      }
+      animFrameRef.current = requestAnimationFrame(updateLevel);
+    };
+
+    animFrameRef.current = requestAnimationFrame(updateLevel);
+
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
   }, [setMicLevel]);
 
   const startMicrophone = useCallback(() => {
     isExplicitlyStoppedRef.current = false;
-    quickRetriesCountRef.current = 0;
+    consecutiveErrorCountRef.current = 0;
     setLastErrorDebug(null);
 
+    // Requirement 3: Ensure all getUserMedia and SpeechRecognition happen after user gesture tap
+    if (needsUserGesture) {
+      console.log('[Mic] Waiting for user gesture tap on overlay before starting microphone');
+      return;
+    }
+
     audioFeedback.playMicStart();
-    startSpeechRecognition();
-    startAudioWaveformMonitor();
-  }, [startSpeechRecognition, startAudioWaveformMonitor, setLastErrorDebug]);
+    safeStartRecognition();
+  }, [needsUserGesture, safeStartRecognition, setLastErrorDebug]);
 
   const stopMicrophone = useCallback(() => {
     isExplicitlyStoppedRef.current = true;
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
     }
 
     if (recognitionRef.current) {
       try {
         recognitionRef.current.abort();
       } catch (_) {}
-      recognitionRef.current = null;
     }
 
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
+    isListeningRef.current = false;
+    isStartingRef.current = false;
 
     setMicLevel(0);
     setMicStatus('paused');
@@ -359,22 +512,18 @@ export function useContinuousMic() {
   // Register with voice command router
   useEffect(() => {
     registerVoiceRouterProviders(
-      () => null, // camera getter handled by camera component
+      () => null,
       stopMicrophone,
       startMicrophone
     );
   }, [stopMicrophone, startMicrophone]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopMicrophone();
-    };
-  }, [stopMicrophone]);
-
   return {
     micStatus,
     startMicrophone,
     stopMicrophone,
+    requestMicPermissionAndStart,
+    needsUserGesture,
+    setNeedsUserGesture,
   };
 }

@@ -17,6 +17,170 @@ export interface OpenGoogleMapsOptions {
   bypassModePrompt?: boolean;
 }
 
+declare global {
+  interface Window {
+    isWaitingForDestination?: boolean;
+  }
+}
+
+/**
+ * Extracts destination string from spoken sentence using open-vocabulary pattern matching.
+ */
+export function extractDestination(text: string): string | null {
+  const t = text.toLowerCase().trim();
+  const patterns = [
+    /(?:navigate|navigation|take me|go|directions?|route|guide me|walk me|drive me)\s*(?:to|towards)?\s+(.+)/i,
+    /(?:i want to|i wanna|i need to)\s*(?:go|reach|get)\s*(?:to)?\s+(.+)/i,
+    /(?:how (?:do i|can i|to))\s*(?:reach|get to)\s+(.+)/i,
+    // Hindi & Marathi patterns
+    /(?:कृपया\s+)?(?:मुझे\s+)?(.+?)\s*(?:ले\s+चलो|जाना\s+है|का\s+रास्ता|का\s+मार्ग)$/i,
+    /(?:कृपया\s+)?(?:मला\s+)?(.+?)\s*(?:ला\s+जायचं\s+आहे|कडे\s+जा|चा\s+मार्ग)$/i,
+  ];
+
+  for (const p of patterns) {
+    const m = t.match(p);
+    if (m && m[1]) {
+      let dest = m[1].replace(/[.,?!]+$/, '').trim();
+      // Remove trailing filler words if any
+      dest = dest.replace(/\s+(?:please)$/i, '').trim();
+      return dest;
+    }
+  }
+  return null;
+}
+
+/**
+ * Speech synthesis announcement helper with Promise completion.
+ */
+export function speak(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    speechQueue.speak(text, SpeechPriority.NAVIGATION, {
+      allowDuplicate: true,
+      onEnd: () => resolve(),
+    });
+    // Safety timeout in case speech engine onEnd does not trigger
+    setTimeout(resolve, 2000);
+  });
+}
+
+/**
+ * Direct voice-triggered navigation handler.
+ * Does NOT depend on the Navigation tab being open or rendered.
+ */
+export async function startNavigation(rawInput: string): Promise<void> {
+  console.log('[Nav] startNavigation called with:', rawInput);
+
+  // 1. Extract destination if full sentence was passed
+  const extracted = extractDestination(rawInput);
+  let destination = extracted || rawInput.trim();
+
+  // Strip leading filler words: "please", "the", "nearest", "a", "an"
+  let changed = true;
+  while (changed) {
+    const prev = destination;
+    destination = destination.replace(/^(?:please|the|nearest|a|an)\s+/i, '').trim();
+    changed = prev !== destination;
+  }
+  destination = destination.replace(/[.,?!]+$/, '').trim();
+
+  const isGenericNavOnly =
+    /^(?:navigate|navigation|directions?|route|take me|go|walk|drive|where|open navigation|navigation tab)$/i.test(
+      destination
+    );
+
+  console.log('[Nav] Extracted destination:', destination);
+
+  if (!destination || isGenericNavOnly) {
+    await speak('Where do you want to go?');
+    // Set a flag to capture the next voice input as destination
+    if (typeof window !== 'undefined') {
+      window.isWaitingForDestination = true;
+    }
+    useAppStore.getState().setIsPendingDestination(true);
+    return;
+  }
+
+  // Clear pending destination flag
+  if (typeof window !== 'undefined') {
+    window.isWaitingForDestination = false;
+  }
+  useAppStore.getState().setIsPendingDestination(false);
+
+  // 2. Announce immediately to blind user
+  await speak(`Starting navigation to ${destination}`);
+
+  // 3. Get current location (with timeout fallback)
+  let origin = '';
+  try {
+    const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation?.getCurrentPosition(resolve, reject, {
+        timeout: 3000,
+        enableHighAccuracy: false,
+      });
+    });
+    origin = `${pos.coords.latitude},${pos.coords.longitude}`;
+    console.log('[Nav] Got GPS coordinates:', origin);
+  } catch (err) {
+    console.log('[Nav] GPS not available or timed out, Maps will use device location');
+    const storeLoc = useAppStore.getState().currentLocation;
+    if (storeLoc.lat != null && storeLoc.lng != null) {
+      origin = `${storeLoc.lat},${storeLoc.lng}`;
+    }
+  }
+
+  // 4. Build URL
+  const encoded = encodeURIComponent(destination);
+  const mapsUrl = origin
+    ? `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${encoded}&travelmode=walking`
+    : `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=walking`;
+
+  console.log('[Nav] Redirecting to:', mapsUrl);
+
+  // Update App State for Navigation Tab and Activity
+  const app = useAppStore.getState();
+  const stats = useStatsStore.getState();
+  app.setActiveTab('navigation');
+  app.setGoogleMapsNav({
+    destination,
+    geocodedName: destination,
+    url: mapsUrl,
+    travelmode: 'walking',
+    heardTranscript: rawInput,
+    popupBlocked: false,
+    status: 'active',
+    redirectMethod: 'window.open / location.href',
+  });
+  app.setNavDebugInfo({
+    heardText: rawInput,
+    extractedDest: destination,
+    geocodedPlace: destination,
+    finalUrl: mapsUrl,
+    redirectMethod: 'window.open / location.href',
+    timestamp: Date.now(),
+  });
+  stats.recordVoiceCommandSuccess(`navigate to ${destination}`, `Walking navigation to ${destination}`);
+
+  // STEP 4: Make sure Speech Synthesis finishes before redirect
+  // Wait a brief moment (e.g. 1.5 seconds) so the user hears the confirmation before the page leaves
+  await new Promise((r) => setTimeout(r, 1500));
+
+  // 5. Open Google Maps
+  // Try window.open first, fallback to window.location.href
+  // (blind users cannot see new tabs, so location.href is often preferred on mobile)
+  let opened: Window | null = null;
+  try {
+    opened = window.open(mapsUrl, '_blank');
+  } catch (e) {
+    console.warn('[Nav] window.open failed:', e);
+  }
+
+  if (!opened || opened.closed || typeof opened.closed === 'undefined') {
+    // Popup was blocked or on mobile PWA -> redirect directly
+    console.log('[Nav] Popup was blocked or on mobile PWA -> redirect directly');
+    performRedirect(mapsUrl);
+  }
+}
+
 // Handler for temporary travel mode voice answering
 let pendingTravelModeResolver: ((mode: 'walking' | 'driving' | 'transit') => void) | null = null;
 let travelModeTimer: any = null;
@@ -256,7 +420,7 @@ export async function openGoogleMaps(
         type: 'navigation',
         title: `Route to ${destinationDisplayName}`,
         detail: `${formatDistance(route.distanceMeters)}, ~${Math.ceil(route.durationSeconds / 60)} min walk`,
-        status: 'Active',
+        status: 'Completed',
       });
     } catch (routeErr) {
       console.warn('In-app routing warning:', routeErr);

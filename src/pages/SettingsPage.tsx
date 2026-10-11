@@ -25,6 +25,7 @@ import {
   Cpu,
   Server,
   Layers,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
@@ -725,10 +726,55 @@ export const SettingsPage: React.FC = () => {
             : 'bg-white border-gray-100 text-gray-900'
         }`}
       >
-        <h3 className="font-extrabold text-base tracking-tight mb-4 flex items-center gap-2">
-          <Bug className="w-5 h-5 text-indigo-600" />
-          <span>Diagnostics & Maintenance</span>
-        </h3>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="font-extrabold text-base tracking-tight flex items-center gap-2">
+            <Bug className="w-5 h-5 text-indigo-600 dark:text-yellow-400" />
+            <span>Diagnostics & Maintenance</span>
+          </h3>
+
+          {/* Small "Run Self-Test" Button */}
+          <button
+            onClick={() => {
+              useAppStore.getState().setSelfTestOpen(true);
+              speechQueue.speak('Starting system self test', SpeechPriority.STATUS);
+            }}
+            aria-label="Run system self-test"
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl font-bold text-xs transition-all shadow-sm cursor-pointer ${
+              highContrast
+                ? 'bg-yellow-400 text-black hover:bg-yellow-300'
+                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            <span>Run Self-Test</span>
+          </button>
+        </div>
+
+        {/* 11-Point System Self-Test Row */}
+        <div className="flex flex-wrap items-center justify-between gap-4 py-3 border-b border-gray-100 dark:border-zinc-800">
+          <div>
+            <strong className="text-xs block font-bold">11-Point System Self-Test</strong>
+            <span className="text-[11px] opacity-70">
+              Verify microphone, speech recognition, TTS, GPS, camera, OCR, command parsing, and AI.
+            </span>
+          </div>
+
+          <button
+            onClick={() => {
+              useAppStore.getState().setSelfTestOpen(true);
+              speechQueue.speak('Starting system self test', SpeechPriority.STATUS);
+            }}
+            aria-label="Run self-test"
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-black text-xs transition-all cursor-pointer ${
+              highContrast
+                ? 'bg-yellow-400 text-black hover:bg-yellow-300'
+                : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-zinc-800 dark:text-yellow-400'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Launch Check</span>
+          </button>
+        </div>
 
         {/* Walking Stride Length Setting for Step Counting */}
         <div className="flex flex-wrap items-center justify-between gap-4 py-3 border-b border-gray-100 dark:border-zinc-800">

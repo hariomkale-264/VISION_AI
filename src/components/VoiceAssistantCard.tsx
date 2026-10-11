@@ -171,11 +171,24 @@ export const VoiceAssistantCard: React.FC<VoiceAssistantCardProps> = ({
 
       {/* Mic Controls (Minimum 56px touch target backup buttons) */}
       <div className="mt-5 pt-3 border-t border-gray-100 flex items-center gap-3">
-        {isListening ? (
+        {micStatus === 'error' ? (
+          <button
+            onClick={onStartMic}
+            aria-label="Tap to enable voice"
+            className={`flex-1 py-3.5 px-4 rounded-xl font-black text-sm transition shadow min-h-[56px] flex items-center justify-center gap-2 cursor-pointer ${
+              highContrast
+                ? 'bg-yellow-400 text-black hover:bg-yellow-300'
+                : 'bg-amber-400 hover:bg-amber-300 text-black'
+            }`}
+          >
+            <Mic className="w-5 h-5 text-black" />
+            <span>Tap to Enable Voice</span>
+          </button>
+        ) : isListening ? (
           <button
             onClick={onStopMic}
             aria-label="Stop listening"
-            className="flex-1 py-3.5 px-4 rounded-xl bg-gray-900 text-white font-extrabold text-xs hover:bg-black transition shadow min-h-[56px] flex items-center justify-center gap-2"
+            className="flex-1 py-3.5 px-4 rounded-xl bg-gray-900 text-white font-extrabold text-xs hover:bg-black transition shadow min-h-[56px] flex items-center justify-center gap-2 cursor-pointer"
           >
             <MicOff className="w-4 h-4" />
             <span>Stop Listening</span>
@@ -184,7 +197,7 @@ export const VoiceAssistantCard: React.FC<VoiceAssistantCardProps> = ({
           <button
             onClick={onStartMic}
             aria-label="Start listening"
-            className="flex-1 py-3.5 px-4 rounded-xl bg-emerald-600 text-white font-extrabold text-xs hover:bg-emerald-700 transition shadow min-h-[56px] flex items-center justify-center gap-2"
+            className="flex-1 py-3.5 px-4 rounded-xl bg-emerald-600 text-white font-extrabold text-xs hover:bg-emerald-700 transition shadow min-h-[56px] flex items-center justify-center gap-2 cursor-pointer"
           >
             <Mic className="w-4 h-4" />
             <span>Start Listening</span>

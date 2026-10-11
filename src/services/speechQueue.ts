@@ -28,6 +28,8 @@ class SpeechQueueService {
   private resumeMicTimeout: any = null;
   private lastSpokenText = '';
   private lastSpokenTime = 0;
+  private onBeforeSpeakingHandler: (() => void) | null = null;
+  private onAfterSpeakingHandler: (() => void) | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -36,6 +38,18 @@ class SpeechQueueService {
         window.speechSynthesis.getVoices();
       };
     }
+  }
+
+  /**
+   * Registers coordination callbacks to abort SpeechRecognition before speaking
+   * and restart it 500ms after speech finishes.
+   */
+  public registerSpeechCoordination(
+    onBeforeSpeaking: () => void,
+    onAfterSpeaking: () => void
+  ) {
+    this.onBeforeSpeakingHandler = onBeforeSpeaking;
+    this.onAfterSpeakingHandler = onAfterSpeaking;
   }
 
   public speak(
@@ -109,8 +123,10 @@ class SpeechQueueService {
       this.resumeMicTimeout = null;
     }
 
-    // Flag store that speech is active (microphone pause)
+    // Requirement 4: Before speaking: recognition.abort() and set isSpeaking = true
+    this.isSpeaking = true;
     setIsSpeaking(true);
+    this.onBeforeSpeakingHandler?.();
     announceAria(item.text);
 
     const utterance = new SpeechSynthesisUtterance(item.text);
@@ -140,16 +156,17 @@ class SpeechQueueService {
       clearTimeout(watchdogTimeout);
       item.onEnd?.();
       this.currentUtterance = null;
-      this.isSpeaking = false;
 
       // Check if more items in queue
       if (this.queue.length > 0) {
         this.processNext();
       } else {
-        // When speech is completely done, wait 300ms before unmuting mic capture so assistant never hears itself!
+        // Requirement 4: After utterance.onend: wait 500 ms, then restart recognition
         this.resumeMicTimeout = setTimeout(() => {
+          this.isSpeaking = false;
           setIsSpeaking(false);
-        }, 300);
+          this.onAfterSpeakingHandler?.();
+        }, 500);
       }
     };
 
@@ -168,13 +185,16 @@ class SpeechQueueService {
       window.speechSynthesis.cancel();
     }
     this.queue = [];
-    this.isSpeaking = false;
     this.currentUtterance = null;
     if (this.resumeMicTimeout) {
       clearTimeout(this.resumeMicTimeout);
       this.resumeMicTimeout = null;
     }
-    useAppStore.getState().setIsSpeaking(false);
+    this.resumeMicTimeout = setTimeout(() => {
+      this.isSpeaking = false;
+      useAppStore.getState().setIsSpeaking(false);
+      this.onAfterSpeakingHandler?.();
+    }, 500);
   }
 
   public getIsSpeaking(): boolean {

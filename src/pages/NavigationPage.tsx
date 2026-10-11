@@ -12,11 +12,11 @@ import { searchDestination } from '../services/geocode';
 import { getWalkingRoute } from '../services/routing';
 import { formatDistance } from '../utils/haversine';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
-import { openGoogleMaps } from '../services/navigationService';
+import { openGoogleMaps, startNavigation, performRedirect } from '../services/navigationService';
 
 export const NavigationPage: React.FC = () => {
   const currentLocation = useAppStore((s) => s.currentLocation);
-  const startNavigation = useAppStore((s) => s.startNavigation);
+  const appStartNavigation = useAppStore((s) => s.startNavigation);
   const navigationActive = useAppStore((s) => s.navigationActive);
   const destination = useAppStore((s) => s.destination);
   const routeSteps = useAppStore((s) => s.routeSteps);
@@ -24,6 +24,8 @@ export const NavigationPage: React.FC = () => {
   const highContrast = useAppStore((s) => s.highContrast);
   const googleMapsNav = useAppStore((s) => s.googleMapsNav);
   const navDebugInfo = useAppStore((s) => s.navDebugInfo);
+
+  const activeNavDestination = googleMapsNav?.destination || destination || '';
 
   const recordVoiceCommandSuccess = useStatsStore((s) => s.recordVoiceCommandSuccess);
   const addActivity = useStatsStore((s) => s.addActivity);
@@ -97,6 +99,33 @@ export const NavigationPage: React.FC = () => {
           </button>
         </div>
       </form>
+
+      {/* STEP 5: Big High-Contrast Fallback Walking Navigation Button */}
+      {activeNavDestination && (
+        <div className="w-full">
+          <button
+            onClick={() => {
+              if (googleMapsNav?.url) {
+                performRedirect(googleMapsNav.url);
+              } else {
+                startNavigation(activeNavDestination);
+              }
+            }}
+            aria-label={`Tap to start walking navigation to ${activeNavDestination}`}
+            className={`w-full py-6 px-6 sm:px-8 rounded-3xl font-black text-xl sm:text-2xl shadow-2xl border-4 transition-all transform active:scale-95 flex items-center justify-center gap-4 cursor-pointer min-h-[84px] ${
+              highContrast
+                ? 'bg-yellow-400 text-black border-white hover:bg-yellow-300'
+                : 'bg-yellow-400 text-black border-yellow-600 hover:bg-yellow-300 dark:border-white shadow-yellow-500/25'
+            }`}
+          >
+            <Navigation className="w-8 h-8 shrink-0 fill-current" />
+            <span className="text-center font-extrabold tracking-tight leading-snug">
+              Tap to start walking navigation to {activeNavDestination}
+            </span>
+            <ExternalLink className="w-7 h-7 shrink-0" />
+          </button>
+        </div>
+      )}
 
       {/* Active Google Maps Navigation Status Card & Debug Line */}
       {googleMapsNav && (

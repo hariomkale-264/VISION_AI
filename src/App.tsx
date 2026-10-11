@@ -19,6 +19,8 @@ import { TopBar } from './components/TopBar';
 import { LiveStatusStrip } from './components/LiveStatusStrip';
 import { GoogleMapsNavBanner } from './components/GoogleMapsNavBanner';
 import { TapMapsOverlay } from './components/TapMapsOverlay';
+import { VoiceGestureOverlay } from './components/VoiceGestureOverlay';
+import { SelfTestModal } from './components/SelfTestModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OnboardingModal } from './components/OnboardingModal';
 import { speechQueue, SpeechPriority } from './services/speechQueue';
@@ -41,7 +43,12 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(!onboardingComplete);
 
   // Core background services & continuous hooks
-  const { startMicrophone, stopMicrophone } = useContinuousMic();
+  const {
+    startMicrophone,
+    stopMicrophone,
+    requestMicPermissionAndStart,
+    needsUserGesture,
+  } = useContinuousMic();
   const { videoRef, isCameraReady, cameraError, startCamera, stopCamera, captureSnapshot } = useCamera();
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
 
@@ -171,11 +178,20 @@ export default function App() {
       {/* Offline Toast Indicator */}
       <OfflineIndicator />
 
+      {/* Voice Gesture Overlay for User Gesture, Permission, & Recovery */}
+      <VoiceGestureOverlay
+        needsUserGesture={needsUserGesture}
+        onRequestPermissionAndStart={requestMicPermissionAndStart}
+      />
+
       {/* Tap Target Overlay for Blocked Redirects Fallback */}
       <TapMapsOverlay />
 
+      {/* 11-Point System Self-Test Diagnostic Modal */}
+      <SelfTestModal />
+
       {/* First-launch Guided Spoken Onboarding Modal */}
-      {showOnboarding && (
+      {showOnboarding && !needsUserGesture && (
         <OnboardingModal onComplete={handleOnboardingComplete} />
       )}
 

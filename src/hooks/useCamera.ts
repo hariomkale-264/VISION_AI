@@ -25,18 +25,14 @@ export function useCamera() {
       let stream: MediaStream;
       try {
         const constraints: MediaStreamConstraints = {
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          video: { facingMode: 'environment' },
           audio: false,
         };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch (firstErr) {
         // Fallback for laptops/desktops or devices without rear cameras
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: true,
           audio: false,
         });
       }

@@ -49,7 +49,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
   const requestCamera = async () => {
     speechQueue.speak('Requesting camera access to detect obstacles and describe your surroundings.', SpeechPriority.STATUS);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      });
       stream.getTracks().forEach((t) => t.stop());
       setCameraGranted(true);
       speechQueue.speak('Camera access granted.', SpeechPriority.STATUS);
