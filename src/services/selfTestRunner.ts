@@ -9,6 +9,7 @@ import { extractDestination } from './navigationService';
 import { parseCommandIntentOffline } from './voiceRouter';
 import { describeSurroundings, readTextFromImage } from './gemini';
 import { getApiKey, testApiKey } from './apiKey';
+import { AI_PROVIDERS, getActiveProviderId } from './aiProviders';
 
 export type SelfTestStatus = 'pending' | 'running' | 'pass' | 'fail' | 'skipped';
 
@@ -759,31 +760,33 @@ export async function runSelfTestSequence(
     }
   }
 
-  // CHECK 11: API KEY / GEMINI
+  // CHECK 11: API KEY / ACTIVE AI ENGINE
   if (!isCancelled()) {
     const idx = 10;
     updateItem(idx, { status: 'running' });
     const startTime = Date.now();
+    const activePid = getActiveProviderId();
+    const activeName = AI_PROVIDERS[activePid]?.name || 'AI Engine';
     try {
       await runWithTimeout(
         (async () => {
           const key = getApiKey();
           if (!key) {
-            throw new Error('No API key configured in Settings. Add your API key in Settings.');
+            throw new Error(`No API key configured for ${activeName}. Add your key in Settings.`);
           }
-          const testRes = await testApiKey(key);
+          const testRes = await testApiKey(key, activePid);
           if (!testRes.ok) {
             throw new Error(testRes.message || 'API key verification rejected by server');
           }
 
-          const detail = `Gemini API verified: ${testRes.message}`;
+          const detail = `${activeName} verified: ${testRes.message}`;
           updateItem(idx, {
             status: 'pass',
             detail,
             durationMs: Date.now() - startTime,
           });
 
-          await speakStep('Gemini API check passed.');
+          await speakStep(`${activeName} API check passed.`);
         })(),
         10000
       );
@@ -793,7 +796,7 @@ export async function runSelfTestSequence(
         error: err.message || 'API key check failed',
         durationMs: Date.now() - startTime,
       });
-      await speakStep(`Gemini API check failed: ${err.message || 'invalid key'}`);
+      await speakStep(`${activeName} check failed: ${err.message || 'invalid key'}`);
     }
   }
 

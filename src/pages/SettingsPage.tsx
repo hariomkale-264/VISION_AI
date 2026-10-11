@@ -42,6 +42,15 @@ import {
   setCustomBaseUrl,
   getCustomModel,
   setCustomModel,
+  getGrokModel,
+  setGrokModel,
+  getGrokVisionModel,
+  setGrokVisionModel,
+  getGroqModel,
+  setGroqModel,
+  getGroqVisionModel,
+  setGroqVisionModel,
+  fetchProviderModels,
   maskApiKey,
 } from '../services/aiProviders';
 import { testApiKey } from '../services/apiKey';
@@ -80,6 +89,15 @@ export const SettingsPage: React.FC = () => {
   const [customBaseUrlInput, setCustomBaseUrlInput] = useState(() => getCustomBaseUrl());
   const [customModelInput, setCustomModelInput] = useState(() => getCustomModel());
 
+  // Distinct Model Configurations for Grok and Groq
+  const [grokModelInput, setGrokModelInput] = useState(() => getGrokModel());
+  const [grokVisionModelInput, setGrokVisionModelInput] = useState(() => getGrokVisionModel());
+  const [groqModelInput, setGroqModelInput] = useState(() => getGroqModel());
+  const [groqVisionModelInput, setGroqVisionModelInput] = useState(() => getGroqVisionModel());
+
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+
   const [testStatus, setTestStatus] = useState<{
     tested: boolean;
     ok: boolean;
@@ -90,6 +108,7 @@ export const SettingsPage: React.FC = () => {
   // Sync provider on mount and refresh key info
   useEffect(() => {
     refreshKeyStatus(selectedProvider);
+    setDiscoveredModels([]);
   }, [selectedProvider]);
 
   const refreshKeyStatus = (providerId: AIProviderId) => {
@@ -104,40 +123,78 @@ export const SettingsPage: React.FC = () => {
     setInputKey('');
     setShowKey(false);
     setTestStatus(null);
+    setDiscoveredModels([]);
     refreshKeyStatus(pid);
     speechQueue.speak(`AI provider set to ${AI_PROVIDERS[pid].name}`, SpeechPriority.STATUS);
   };
 
+  const handleDiscoverModels = async () => {
+    const keyToUse = inputKey.trim() || getProviderApiKey(selectedProvider);
+    if (!keyToUse) {
+      speechQueue.speak('Please enter or save an API key first.', SpeechPriority.STATUS);
+      return;
+    }
+
+    setIsDiscovering(true);
+    speechQueue.speak(`Checking available models for ${AI_PROVIDERS[selectedProvider].name}...`, SpeechPriority.STATUS);
+
+    try {
+      const res = await fetchProviderModels(selectedProvider, keyToUse);
+      if (res.ok && res.models.length > 0) {
+        setDiscoveredModels(res.models);
+        const countMsg = `Found ${res.models.length} models for ${AI_PROVIDERS[selectedProvider].name}.`;
+        speechQueue.speak(countMsg, SpeechPriority.STATUS);
+      } else {
+        const errMsg = res.error || 'No models returned from endpoint.';
+        speechQueue.speak(`Model discovery failed: ${errMsg}`, SpeechPriority.STATUS);
+        setTestStatus({
+          tested: true,
+          ok: false,
+          message: `Model discovery: ${errMsg}`,
+        });
+      }
+    } catch (e: any) {
+      speechQueue.speak('Unable to fetch models.', SpeechPriority.STATUS);
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+
   const handleSaveKey = () => {
-    let keyToSave = inputKey.trim();
+    const keyToSave = inputKey.trim();
     if (!keyToSave) {
       speechQueue.speak('Please enter a key before saving.', SpeechPriority.STATUS);
       return;
     }
 
-    // Smart auto-routing: if user entered a "gsk_..." key under Grok, save it under Groq
-    let targetProvider = selectedProvider;
-    if (keyToSave.startsWith('gsk_') && selectedProvider === 'grok') {
-      targetProvider = 'groq';
-      setSelectedProvider('groq');
-      setActiveProviderId('groq');
-      setActiveAiProviderStore('groq');
-    }
-
     try {
-      setProviderApiKey(targetProvider, keyToSave);
-      if (targetProvider === 'custom') {
+      // Save key strictly to the user-selected provider (no silent auto-redirection)
+      setProviderApiKey(selectedProvider, keyToSave);
+
+      // Save respective provider model configurations
+      if (selectedProvider === 'grok') {
+        setGrokModel(grokModelInput);
+        setGrokVisionModel(grokVisionModelInput);
+      } else if (selectedProvider === 'groq') {
+        setGroqModel(groqModelInput);
+        setGroqVisionModel(groqVisionModelInput);
+      } else if (selectedProvider === 'custom') {
         setCustomBaseUrl(customBaseUrlInput);
         setCustomModel(customModelInput);
       }
+
+      // Ensure active provider matches the user's choice
+      setActiveProviderId(selectedProvider);
+      setActiveAiProviderStore(selectedProvider);
+
       setInputKey('');
       setShowKey(false);
-      refreshKeyStatus(targetProvider);
+      refreshKeyStatus(selectedProvider);
       setTestStatus(null);
       setKeyMissingAlert(false);
       setLastErrorDebug(null);
 
-      const successNotice = `${AI_PROVIDERS[targetProvider].name} API key saved.`;
+      const successNotice = `${AI_PROVIDERS[selectedProvider].name} API key saved and set as active engine.`;
       speechQueue.speak(successNotice, SpeechPriority.STATUS);
     } catch (err: any) {
       speechQueue.speak('Failed to save API key to local storage.', SpeechPriority.STATUS);
@@ -150,6 +207,7 @@ export const SettingsPage: React.FC = () => {
       setInputKey('');
       setShowKey(false);
       setTestStatus(null);
+      setDiscoveredModels([]);
       refreshKeyStatus(selectedProvider);
 
       const notice = `${AI_PROVIDERS[selectedProvider].name} key removed.`;
@@ -176,6 +234,7 @@ export const SettingsPage: React.FC = () => {
     speechQueue.speak(`Testing API key with ${providerName}...`, SpeechPriority.STATUS);
 
     try {
+      // Always test against the user's explicitly selected provider
       const res = await testApiKey(keyToTest, selectedProvider);
       setTestStatus({
         tested: true,
@@ -184,13 +243,15 @@ export const SettingsPage: React.FC = () => {
       });
 
       if (res.ok) {
-        // If it auto-detected Groq, update local selectedProvider state
-        const currentActive = getActiveProviderId();
-        if (currentActive !== selectedProvider) {
-          setSelectedProvider(currentActive);
-          refreshKeyStatus(currentActive);
+        // Sync model states after successful test verification
+        if (selectedProvider === 'grok') {
+          setGrokModelInput(getGrokModel());
+          setGrokVisionModelInput(getGrokVisionModel());
+        } else if (selectedProvider === 'groq') {
+          setGroqModelInput(getGroqModel());
+          setGroqVisionModelInput(getGroqVisionModel());
         }
-        speechQueue.speak('Key verified and working.', SpeechPriority.STATUS);
+        speechQueue.speak('API key verified and operational.', SpeechPriority.STATUS);
         setKeyMissingAlert(false);
         setLastErrorDebug(null);
       } else {
@@ -361,6 +422,178 @@ export const SettingsPage: React.FC = () => {
             })}
           </div>
         </div>
+
+        {/* xAI Grok Model Configuration */}
+        {selectedProvider === 'grok' && (
+          <div className="p-4 rounded-2xl bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 mb-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-bold text-xs">
+                <Cpu className="w-4 h-4 text-indigo-600 dark:text-yellow-400" />
+                <span>xAI Grok Model & Vision Configuration (api.x.ai)</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleDiscoverModels}
+                disabled={isDiscovering}
+                className="text-[11px] font-bold px-3 py-1 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 dark:bg-zinc-800 dark:text-yellow-400 dark:hover:bg-zinc-700 transition flex items-center gap-1 cursor-pointer"
+              >
+                {isDiscovering ? (
+                  <span className="w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <RotateCcw className="w-3 h-3" />
+                )}
+                <span>Discover Account Models</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold mb-1 opacity-80">Reasoning / Chat Model</label>
+                <div className="space-y-1.5">
+                  <select
+                    value={grokModelInput}
+                    onChange={(e) => setGrokModelInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="grok-2-1212">grok-2-1212 (Official Fast & Accurate)</option>
+                    <option value="grok-2">grok-2 (Standard Alias)</option>
+                    <option value="grok-2-latest">grok-2-latest (Latest Alias)</option>
+                    <option value="grok-beta">grok-beta (Beta Model)</option>
+                    {discoveredModels
+                      .filter(
+                        (m) =>
+                          !['grok-2-1212', 'grok-2', 'grok-2-latest', 'grok-beta'].includes(m) &&
+                          !m.includes('vision')
+                      )
+                      .map((m) => (
+                        <option key={m} value={m}>
+                          {m} (Discovered on Account)
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1 opacity-80">Image Understanding (Vision) Model</label>
+                <select
+                  value={grokVisionModelInput}
+                  onChange={(e) => setGrokVisionModelInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
+                >
+                  <option value="grok-2-vision-1212">grok-2-vision-1212 (Multimodal Vision)</option>
+                  <option value="grok-2-vision-latest">grok-2-vision-latest (Latest Vision)</option>
+                  <option value="grok-vision-beta">grok-vision-beta (Vision Beta)</option>
+                  {discoveredModels
+                    .filter(
+                      (m) =>
+                        m.includes('vision') &&
+                        !['grok-2-vision-1212', 'grok-2-vision-latest', 'grok-vision-beta'].includes(m)
+                    )
+                    .map((m) => (
+                      <option key={m} value={m}>
+                        {m} (Discovered on Account)
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            {inputKey.startsWith('gsk_') && (
+              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Notice: Your key begins with <strong>gsk_</strong>, which is a Groq key (console.groq.com). If you wish to use Groq, select the &ldquo;Groq (Ultra Fast)&rdquo; tab above.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Groq Model Configuration */}
+        {selectedProvider === 'groq' && (
+          <div className="p-4 rounded-2xl bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 mb-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-bold text-xs">
+                <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Groq LPU Inference Settings (api.groq.com)</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleDiscoverModels}
+                disabled={isDiscovering}
+                className="text-[11px] font-bold px-3 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-zinc-800 dark:text-emerald-400 dark:hover:bg-zinc-700 transition flex items-center gap-1 cursor-pointer"
+              >
+                {isDiscovering ? (
+                  <span className="w-3 h-3 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <RotateCcw className="w-3 h-3" />
+                )}
+                <span>Discover Account Models</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold mb-1 opacity-80">Text Reasoning Model</label>
+                <select
+                  value={groqModelInput}
+                  onChange={(e) => setGroqModelInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
+                >
+                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended)</option>
+                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fastest)</option>
+                  <option value="mixtral-8x7b-32768">mixtral-8x7b-32768 (MoE)</option>
+                  {discoveredModels
+                    .filter(
+                      (m) =>
+                        !['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'].includes(m) &&
+                        !m.includes('vision')
+                    )
+                    .map((m) => (
+                      <option key={m} value={m}>
+                        {m} (Discovered on Account)
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1 opacity-80">Vision / Multimodal Model</label>
+                <select
+                  value={groqVisionModelInput}
+                  onChange={(e) => setGroqVisionModelInput(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
+                >
+                  <option value="meta-llama/llama-4-scout-17b-16e-instruct">
+                    meta-llama/llama-4-scout-17b-16e-instruct (Recommended Vision)
+                  </option>
+                  <option value="meta-llama/llama-4-maverick-17b-128e-instruct">
+                    meta-llama/llama-4-maverick-17b-128e-instruct (High-Capacity Vision)
+                  </option>
+                  <option value="qwen/qwen3.8-27b">
+                    qwen/qwen3.8-27b (Qwen Multimodal)
+                  </option>
+                  {discoveredModels
+                    .filter(
+                      (m) =>
+                        (m.includes('scout') || m.includes('maverick') || m.includes('qwen') || m.includes('vision')) &&
+                        ![
+                          'meta-llama/llama-4-scout-17b-16e-instruct',
+                          'meta-llama/llama-4-maverick-17b-128e-instruct',
+                          'qwen/qwen3.8-27b',
+                        ].includes(m)
+                    )
+                    .map((m) => (
+                      <option key={m} value={m}>
+                        {m} (Discovered on Account)
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Custom Provider URL and Model inputs */}
         {selectedProvider === 'custom' && (
@@ -533,7 +766,13 @@ export const SettingsPage: React.FC = () => {
                 {activeProviderConfig.name}
               </span>
               <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-white/80 dark:bg-black/50 border border-indigo-200 dark:border-yellow-400/40">
-                {selectedProvider === 'custom' ? customModelInput : activeProviderConfig.defaultModel}
+                {selectedProvider === 'custom'
+                  ? customModelInput
+                  : selectedProvider === 'grok'
+                  ? grokModelInput
+                  : selectedProvider === 'groq'
+                  ? groqModelInput
+                  : activeProviderConfig.defaultModel}
               </span>
             </div>
             <div className="text-[11px] opacity-75">

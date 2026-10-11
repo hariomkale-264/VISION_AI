@@ -21,11 +21,15 @@ export function useCamera() {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
 
-      // Try environment (rear) camera first, with automatic fallback for laptop webcams
+      // Try environment (rear) camera with ideal constraints for mobile, with automatic fallback for webcams
       let stream: MediaStream;
       try {
         const constraints: MediaStreamConstraints = {
-          video: { facingMode: 'environment' },
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -40,6 +44,9 @@ export function useCamera() {
       streamRef.current = stream;
 
       if (videoRef.current) {
+        videoRef.current.setAttribute('playsinline', 'true');
+        videoRef.current.setAttribute('webkit-playsinline', 'true');
+        videoRef.current.muted = true;
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
           if (videoRef.current) {

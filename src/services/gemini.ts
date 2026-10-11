@@ -10,6 +10,7 @@ import {
   GEMINI_DEFAULT_MODEL,
   GEMINI_FALLBACK_MODEL,
 } from './apiKey';
+import { AI_PROVIDERS, getActiveProviderId } from './aiProviders';
 
 export { GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODEL };
 
@@ -130,6 +131,8 @@ export function scheduleRateLimitedCall<T>(callFn: () => Promise<T>): Promise<T>
  */
 export function formatSpecificError(err: any): { spoken: string; debug: string } {
   const msg = String(err?.message || err);
+  const activePid = getActiveProviderId();
+  const providerName = AI_PROVIDERS[activePid]?.name || 'AI';
 
   // Check offline first
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -139,21 +142,21 @@ export function formatSpecificError(err: any): { spoken: string; debug: string }
   }
 
   // Missing API key
-  if (msg.includes('missing') || msg.includes('No Gemini API key') || !getApiKey()) {
+  if (msg.includes('missing') || msg.includes('No Gemini API key') || msg.includes('No AI API key') || !getApiKey()) {
     const res = {
-      spoken: 'Gemini API key is missing. Please add it in Settings.',
-      debug: 'Gemini API key is missing. Please add it in Settings.',
+      spoken: `${providerName} API key is missing. Please add it in Settings.`,
+      debug: `${providerName} API key is missing. Please add it in Settings.`,
     };
     useAppStore.getState().setLastErrorDebug(res.debug);
     useAppStore.getState().setKeyMissingAlert(true);
     return res;
   }
 
-  // 429 Rate limiting
-  if (msg.includes('429') || err?.status === 429) {
+  // 429 Rate limiting / quota
+  if (msg.includes('429') || err?.status === 429 || msg.toLowerCase().includes('quota')) {
     const res = {
-      spoken: 'Too many requests, please wait a few seconds.',
-      debug: 'HTTP 429 Too Many Requests (Rate limit reached)',
+      spoken: `${providerName} rate limit or quota exceeded. Please wait a moment or check credits.`,
+      debug: `HTTP 429: Too Many Requests / Quota limit reached on ${providerName}`,
     };
     useAppStore.getState().setLastErrorDebug(res.debug);
     return res;
@@ -161,7 +164,10 @@ export function formatSpecificError(err: any): { spoken: string; debug: string }
 
   // 401/403 Authentication problem
   if (msg.includes('401') || msg.includes('403') || err?.status === 401 || err?.status === 403) {
-    const res = { spoken: 'API key problem.', debug: 'HTTP 401/403 API key authentication failure' };
+    const res = {
+      spoken: `${providerName} API key authentication failed. Please check your key in Settings.`,
+      debug: `HTTP 401/403: API key authentication failure for ${providerName}`,
+    };
     useAppStore.getState().setLastErrorDebug(res.debug);
     return res;
   }
@@ -174,15 +180,15 @@ export function formatSpecificError(err: any): { spoken: string; debug: string }
     err?.status === 404
   ) {
     const res = {
-      spoken: 'The requested AI model is currently not available. Please check your settings.',
-      debug: `HTTP 404: Model not found. Attempted ${GEMINI_DEFAULT_MODEL} with fallback ${GEMINI_FALLBACK_MODEL}.`,
+      spoken: `The requested ${providerName} model is currently not available. Please verify model configuration in Settings.`,
+      debug: `HTTP 404: Model not found on ${providerName}. Detail: ${msg}`,
     };
     useAppStore.getState().setLastErrorDebug(res.debug);
     return res;
   }
 
   const res = {
-    spoken: 'Speech service is not reachable. Please use Chrome and allow the microphone.',
+    spoken: `${providerName} service error: ${msg.slice(0, 80)}`,
     debug: msg.slice(0, 100),
   };
   useAppStore.getState().setLastErrorDebug(res.debug);

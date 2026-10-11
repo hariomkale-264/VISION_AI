@@ -10,6 +10,10 @@ import {
   getActiveApiKey,
   getCustomBaseUrl,
   getCustomModel,
+  getGrokModel,
+  getGrokVisionModel,
+  getGroqModel,
+  getGroqVisionModel,
   notifyActiveApiKeyMissing,
 } from './aiProviders';
 import {
@@ -166,9 +170,16 @@ export async function askMultiProviderQuestion(
     return res.data?.content?.[0]?.text || 'I am here to assist you.';
   }
 
-  // 3. OpenAI-Compatible (Grok, DeepSeek, OpenAI, Custom)
+  // 3. OpenAI-Compatible (Grok, Groq, DeepSeek, OpenAI, Custom)
   const baseUrl = provider === 'custom' ? getCustomBaseUrl() : config.baseUrl;
-  const modelName = provider === 'custom' ? getCustomModel() : config.defaultModel;
+  const modelName =
+    provider === 'grok'
+      ? getGrokModel()
+      : provider === 'groq'
+      ? getGroqModel()
+      : provider === 'custom'
+      ? getCustomModel()
+      : config.defaultModel;
   const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
   const res = await callAiWithProxyFallback(endpoint, {
@@ -276,12 +287,14 @@ export async function describeSurroundingsMultiProvider(imageBase64: string): Pr
     return res.data?.content?.[0]?.text || 'Path appears clear.';
   }
 
-  // 3. Grok / OpenAI / Custom Vision
+  // 3. Grok / Groq / OpenAI / Custom Vision
   const config = AI_PROVIDERS[provider];
   const baseUrl = provider === 'custom' ? getCustomBaseUrl() : config.baseUrl;
   const modelName =
     provider === 'grok'
-      ? 'grok-2-vision-1212'
+      ? getGrokVisionModel()
+      : provider === 'groq'
+      ? getGroqVisionModel()
       : provider === 'custom'
       ? getCustomModel()
       : config.defaultModel;
@@ -395,12 +408,14 @@ export async function readTextMultiProvider(imageBase64: string): Promise<string
     return res.data?.content?.[0]?.text || 'No readable text found.';
   }
 
-  // 3. Grok / OpenAI / Custom Vision
+  // 3. Grok / Groq / OpenAI / Custom Vision
   const config = AI_PROVIDERS[provider];
   const baseUrl = provider === 'custom' ? getCustomBaseUrl() : config.baseUrl;
   const modelName =
     provider === 'grok'
-      ? 'grok-2-vision-1212'
+      ? getGrokVisionModel()
+      : provider === 'groq'
+      ? getGroqVisionModel()
       : provider === 'custom'
       ? getCustomModel()
       : config.defaultModel;

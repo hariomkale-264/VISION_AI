@@ -38,8 +38,8 @@ export const AI_PROVIDERS: Record<AIProviderId, ProviderConfig> = {
     id: 'groq',
     name: 'Groq (Ultra Fast)',
     tagline: 'Ultra-fast LPU inference (gsk_... keys)',
-    defaultModel: 'openai/gpt-oss-120b',
-    fallbackModel: 'qwen/qwen3.8-27b',
+    defaultModel: 'llama-3.3-70b-versatile',
+    fallbackModel: 'llama-3.1-8b-instant',
     storageKey: 'vision_ai_groq_key',
     baseUrl: 'https://api.groq.com/openai/v1',
     supportsVision: true,
@@ -50,8 +50,8 @@ export const AI_PROVIDERS: Record<AIProviderId, ProviderConfig> = {
     id: 'grok',
     name: 'xAI Grok',
     tagline: 'High-speed Grok reasoning & Grok vision (xai-... keys)',
-    defaultModel: 'grok-2-latest',
-    fallbackModel: 'grok-2-vision-latest',
+    defaultModel: 'grok-2-1212',
+    fallbackModel: 'grok-2',
     storageKey: 'vision_ai_grok_key',
     baseUrl: 'https://api.x.ai/v1',
     supportsVision: true,
@@ -110,10 +110,14 @@ export const AI_PROVIDERS: Record<AIProviderId, ProviderConfig> = {
 export const ACTIVE_PROVIDER_STORAGE_KEY = 'vision_ai_active_provider';
 export const CUSTOM_BASE_URL_KEY = 'vision_ai_custom_base_url';
 export const CUSTOM_MODEL_KEY = 'vision_ai_custom_model';
+
 export const GROQ_MODEL_KEY = 'vision_ai_groq_model';
+export const GROQ_VISION_MODEL_KEY = 'vision_ai_groq_vision_model';
+export const GROK_MODEL_KEY = 'vision_ai_grok_model';
+export const GROK_VISION_MODEL_KEY = 'vision_ai_grok_vision_model';
 
 /**
- * Gets configured Groq model name
+ * Gets configured Groq text model name
  */
 export function getGroqModel(): string {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -136,6 +140,182 @@ export function setGroqModel(model: string): void {
     try {
       window.localStorage.setItem(GROQ_MODEL_KEY, model.trim());
     } catch (_) {}
+  }
+}
+
+/**
+ * Gets configured Groq vision model name (replaces decommissioned llama-3.2-11b-vision-preview with Llama 4 Scout)
+ */
+export function getGroqVisionModel(): string {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const stored = window.localStorage.getItem(GROQ_VISION_MODEL_KEY);
+      if (
+        stored &&
+        stored.trim() &&
+        !stored.includes('llama-3.2-11b-vision-preview') &&
+        !stored.includes('llama-3.2-90b-vision-preview')
+      ) {
+        return stored.trim();
+      }
+    } catch (_) {}
+  }
+  return 'meta-llama/llama-4-scout-17b-16e-instruct';
+}
+
+export function setGroqVisionModel(model: string): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(GROQ_VISION_MODEL_KEY, model.trim());
+    } catch (_) {}
+  }
+}
+
+/**
+ * Gets configured xAI Grok text model name
+ */
+export function getGrokModel(): string {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const stored = window.localStorage.getItem(GROK_MODEL_KEY);
+      if (stored && stored.trim()) return stored.trim();
+    } catch (_) {}
+  }
+  const envModel =
+    (import.meta as any).env?.GROK_MODEL ||
+    (import.meta as any).env?.VITE_GROK_MODEL ||
+    (typeof process !== 'undefined' && (process.env?.GROK_MODEL || process.env?.VITE_GROK_MODEL));
+  if (envModel && String(envModel).trim()) return String(envModel).trim();
+
+  return AI_PROVIDERS.grok.defaultModel;
+}
+
+export function setGrokModel(model: string): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(GROK_MODEL_KEY, model.trim());
+    } catch (_) {}
+  }
+}
+
+/**
+ * Gets configured xAI Grok vision model name
+ */
+export function getGrokVisionModel(): string {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const stored = window.localStorage.getItem(GROK_VISION_MODEL_KEY);
+      if (stored && stored.trim()) return stored.trim();
+    } catch (_) {}
+  }
+  return 'grok-2-vision-1212';
+}
+
+export function setGrokVisionModel(model: string): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(GROK_VISION_MODEL_KEY, model.trim());
+    } catch (_) {}
+  }
+}
+
+/**
+ * Dynamically queries the official /v1/models endpoint of a provider to discover active models on the account.
+ */
+export async function fetchProviderModels(
+  providerId: AIProviderId,
+  apiKeyOverride?: string
+): Promise<{ ok: boolean; models: string[]; visionModels: string[]; error?: string }> {
+  const key = apiKeyOverride || getProviderApiKey(providerId);
+  if (!key) {
+    return { ok: false, models: [], visionModels: [], error: 'No API key provided.' };
+  }
+
+  const config = AI_PROVIDERS[providerId];
+  if (!config) {
+    return { ok: false, models: [], visionModels: [], error: `Unknown provider: ${providerId}` };
+  }
+
+  let endpoint = `${config.baseUrl.replace(/\/+$/, '')}/models`;
+  if (providerId === 'custom') {
+    endpoint = `${getCustomBaseUrl().replace(/\/+$/, '')}/models`;
+  }
+
+  try {
+    // Try backend proxy first
+    let rawData: any = null;
+    let status = 0;
+
+    try {
+      const proxyRes = await fetch('/api/ai/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: endpoint,
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${key}`,
+            'Content-Type': 'application/json',
+          },
+        }),
+      });
+      status = proxyRes.status;
+      if (proxyRes.ok) {
+        rawData = await proxyRes.json();
+      }
+    } catch (_) {}
+
+    // Direct browser fetch fallback
+    if (!rawData) {
+      const directRes = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      status = directRes.status;
+      if (directRes.ok) {
+        rawData = await directRes.json();
+      }
+    }
+
+    if (!rawData || !rawData.data || !Array.isArray(rawData.data)) {
+      if (status === 401 || status === 403) {
+        return { ok: false, models: [], visionModels: [], error: 'Authentication failed (invalid key).' };
+      }
+      if (status === 429) {
+        return { ok: false, models: [], visionModels: [], error: 'Rate limit / quota exceeded.' };
+      }
+      return { ok: false, models: [], visionModels: [], error: `Endpoint returned HTTP ${status}` };
+    }
+
+    const ids: string[] = rawData.data
+      .map((item: any) => (typeof item === 'string' ? item : item.id))
+      .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+      .filter((id: string) => !id.includes('llama-3.2-11b-vision-preview') && !id.includes('llama-3.2-90b-vision-preview'));
+
+    const visionModels = ids.filter((id) => {
+      const lower = id.toLowerCase();
+      return (
+        lower.includes('vision') ||
+        lower.includes('vl') ||
+        lower.includes('omni') ||
+        lower.includes('4o') ||
+        lower.includes('multimodal') ||
+        lower.includes('scout') ||
+        lower.includes('maverick') ||
+        lower.includes('qwen3.8')
+      );
+    });
+
+    return {
+      ok: true,
+      models: ids,
+      visionModels,
+    };
+  } catch (err: any) {
+    return { ok: false, models: [], visionModels: [], error: err?.message || String(err) };
   }
 }
 

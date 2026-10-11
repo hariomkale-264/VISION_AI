@@ -280,54 +280,89 @@ export async function testApiKey(
     }
   }
 
-  // 3. xAI Grok: specialized verification to handle model names and quota/credit feedback
+  // 3. xAI Grok: authentic verification against official api.x.ai endpoints with dynamic model discovery
   if (pid === 'grok') {
-    // Helpful guide if user entered a Groq key (starts with "gsk_") into xAI Grok (needs "xai-...")
+    let formatWarning = '';
     if (key.startsWith('gsk_')) {
-      // Test it against Groq automatically!
-      try {
-        const groqTest = await testApiKey(key, 'groq');
-        if (groqTest.ok) {
-          // Auto-save under Groq and inform the user
-          const { setProviderApiKey, setActiveProviderId } = await import('./aiProviders');
-          setProviderApiKey('groq', key);
-          setActiveProviderId('groq');
-          useAppStore.getState().setActiveAiProvider('groq');
-          return {
-            ok: true,
-            message: 'Detected Groq API key (gsk_...)! Automatically connected and verified on Groq (Llama-3.3-70B LPU).',
-          };
-        }
-      } catch (_) {}
-
-      return {
-        ok: false,
-        message: 'This key begins with "gsk_", which is a Groq API key (console.groq.com), not an xAI Grok key (console.x.ai). Please select the "Groq (Ultra Fast)" tab to use it.',
-      };
+      formatWarning = ' (Note: Key starts with "gsk_", which is typically a Groq key rather than an xAI Grok key)';
     }
 
-    // 3a. First check xAI key validity using GET /v1/api-key or GET /v1/models (standard lightweight auth check)
+    // Step 3a: Discover available models on this xAI account via official GET /v1/models
+    let discoveredModels: string[] = [];
+    let discoveredVisionModel = '';
     try {
-      const authCheck = await callAiWithProxyFallback(`https://api.x.ai/v1/api-key`, {
+      const modelsRes = await callAiWithProxyFallback('https://api.x.ai/v1/models', {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
         },
-        timeoutMs: 8000,
+        timeoutMs: 9000,
       });
 
-      if (authCheck.ok) {
-        return { ok: true, message: 'xAI Grok API key is verified and active!' };
+      if (modelsRes.status === 401 || modelsRes.status === 403) {
+        return {
+          ok: false,
+          message: `xAI Grok Authentication Failed (HTTP ${modelsRes.status}): Invalid API key. Please generate a valid key at console.x.ai.${formatWarning}`,
+        };
       }
-    } catch (_) {}
 
-    // 3b. Try chat completion with multiple known Grok model names (grok-2-latest, grok-2, grok-2-vision-1212)
-    const modelsToTry = ['grok-2-latest', 'grok-2', 'grok-2-vision-1212', 'grok-beta'];
+      if (modelsRes.status === 429) {
+        return {
+          ok: false,
+          message: 'xAI Grok Quota Exceeded (HTTP 429): Your account has run out of credits or reached its rate limit. Please check billing at console.x.ai.',
+        };
+      }
+
+      if (modelsRes.ok && modelsRes.data?.data && Array.isArray(modelsRes.data.data)) {
+        discoveredModels = modelsRes.data.data
+          .map((m: any) => (typeof m === 'string' ? m : m.id))
+          .filter((id: any) => typeof id === 'string' && id.trim().length > 0);
+
+        const visionMatch = discoveredModels.find(
+          (m) => m.toLowerCase().includes('vision') || m.toLowerCase().includes('vl')
+        );
+        if (visionMatch) {
+          discoveredVisionModel = visionMatch;
+        }
+      }
+    } catch (_) {
+      // Continue to chat completion fallback
+    }
+
+    // Step 3b: Determine model candidate for chat completion
+    const { getGrokModel, setGrokModel, setGrokVisionModel } = await import('./aiProviders');
+    const configuredModel = getGrokModel();
+
+    let candidateModels: string[] = [];
+    if (discoveredModels.length > 0) {
+      if (discoveredModels.includes(configuredModel)) {
+        candidateModels.push(configuredModel);
+      }
+      // Prioritize standard Grok text models
+      const preferred = ['grok-2-1212', 'grok-2', 'grok-2-latest', 'grok-beta'];
+      for (const p of preferred) {
+        if (discoveredModels.includes(p) && !candidateModels.includes(p)) {
+          candidateModels.push(p);
+        }
+      }
+      // Any remaining non-vision models
+      for (const m of discoveredModels) {
+        if (!m.includes('vision') && !candidateModels.includes(m)) {
+          candidateModels.push(m);
+        }
+      }
+      if (candidateModels.length === 0) candidateModels = discoveredModels;
+    } else {
+      candidateModels = [configuredModel, 'grok-2-1212', 'grok-2', 'grok-2-latest', 'grok-beta'];
+    }
+
     let lastError = '';
+    let lastStatusCode = 0;
 
-    for (const modelCandidate of modelsToTry) {
+    for (const modelCandidate of candidateModels) {
       try {
-        const chatRes = await callAiWithProxyFallback(`https://api.x.ai/v1/chat/completions`, {
+        const chatRes = await callAiWithProxyFallback('https://api.x.ai/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -335,42 +370,194 @@ export async function testApiKey(
           },
           body: {
             model: modelCandidate,
-            messages: [{ role: 'user', content: 'Hi' }],
+            messages: [{ role: 'user', content: 'Respond with OK.' }],
             max_tokens: 10,
           },
-          timeoutMs: 8000,
+          timeoutMs: 9000,
         });
 
         if (chatRes.ok) {
-          return { ok: true, message: `xAI Grok API key verified using model ${modelCandidate}!` };
+          // Update confirmed operational model
+          setGrokModel(modelCandidate);
+          if (discoveredVisionModel) {
+            setGrokVisionModel(discoveredVisionModel);
+          }
+          const visionNote = discoveredVisionModel
+            ? ` | Vision: ${discoveredVisionModel}`
+            : ' | Vision: grok-2-vision-1212';
+          return {
+            ok: true,
+            message: `xAI Grok API key verified successfully! Active model: ${modelCandidate}${visionNote}`,
+          };
         }
 
+        lastStatusCode = chatRes.status;
         const errMsg =
           chatRes.data?.error?.message ||
           chatRes.data?.error ||
           chatRes.data?.message ||
           `HTTP ${chatRes.status}`;
-
         lastError = errMsg;
 
-        // If it's a 401 Unauthorized or 403 Forbidden, stop retrying models (the key is invalid)
         if (chatRes.status === 401 || chatRes.status === 403) {
-          return { ok: false, message: `xAI Grok Authentication Failed: ${errMsg}` };
+          return {
+            ok: false,
+            message: `xAI Grok Authentication Failed (HTTP ${chatRes.status}): Invalid API key. Please check your key at console.x.ai.${formatWarning}`,
+          };
         }
 
-        // If it's a quota error (429 or credit exhausted), report clearly
-        if (chatRes.status === 429 || String(errMsg).toLowerCase().includes('credit') || String(errMsg).toLowerCase().includes('quota')) {
-          return { ok: false, message: `xAI Grok Quota / Credit limit reached: ${errMsg}` };
+        if (chatRes.status === 429) {
+          return {
+            ok: false,
+            message: `xAI Grok Quota Exceeded (HTTP 429): Quota exhausted or rate limit reached on console.x.ai.`,
+          };
         }
-      } catch (e: any) {
-        lastError = e?.message || String(e);
+      } catch (err: any) {
+        lastError = err?.message || String(err);
       }
     }
 
-    return { ok: false, message: `xAI Grok Error: ${lastError}` };
+    if (lastStatusCode === 404) {
+      return {
+        ok: false,
+        message: `xAI Grok Model Not Found (HTTP 404): The requested model was not found on your xAI account. Available models: ${
+          discoveredModels.length > 0 ? discoveredModels.slice(0, 4).join(', ') : 'None discovered'
+        }`,
+      };
+    }
+
+    return {
+      ok: false,
+      message: `xAI Grok Error: ${lastError || 'Could not connect to api.x.ai'}${formatWarning}`,
+    };
   }
 
-  // 4. OpenAI, DeepSeek, Custom (OpenAI-Compatible APIs)
+  // 4. Groq (Ultra Fast LPU): authentic verification against api.groq.com/openai/v1
+  if (pid === 'groq') {
+    const { getGroqModel, setGroqModel, setGroqVisionModel } = await import('./aiProviders');
+    const configuredModel = getGroqModel();
+
+    // Discover available models on Groq via GET /v1/models
+    let discoveredModels: string[] = [];
+    let discoveredVisionModel = '';
+    try {
+      const modelsRes = await callAiWithProxyFallback('https://api.groq.com/openai/v1/models', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+        timeoutMs: 9000,
+      });
+
+      if (modelsRes.status === 401 || modelsRes.status === 403) {
+        return {
+          ok: false,
+          message: `Groq Authentication Failed (HTTP ${modelsRes.status}): Invalid API key. Please check your key at console.groq.com.`,
+        };
+      }
+
+      if (modelsRes.status === 429) {
+        return {
+          ok: false,
+          message: 'Groq Rate Limit Exceeded (HTTP 429): Rate limit hit on console.groq.com.',
+        };
+      }
+
+      if (modelsRes.ok && modelsRes.data?.data && Array.isArray(modelsRes.data.data)) {
+        discoveredModels = modelsRes.data.data
+          .map((m: any) => (typeof m === 'string' ? m : m.id))
+          .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+          .filter((id: string) => !id.includes('llama-3.2-11b-vision-preview') && !id.includes('llama-3.2-90b-vision-preview'));
+
+        const visionMatch = discoveredModels.find(
+          (m) =>
+            m.includes('llama-4-scout') ||
+            m.includes('llama-4-maverick') ||
+            m.includes('qwen3.8') ||
+            m.includes('vision')
+        );
+        if (visionMatch) {
+          discoveredVisionModel = visionMatch;
+        }
+      }
+    } catch (_) {}
+
+    const candidateModels: string[] = [];
+    if (configuredModel && !configuredModel.includes('llama-3.2-11b-vision-preview')) {
+      candidateModels.push(configuredModel);
+    }
+    candidateModels.push('llama-3.3-70b-versatile', 'llama-3.1-8b-instant');
+
+    let lastError = '';
+    let lastStatus = 0;
+
+    for (const modelCandidate of candidateModels) {
+      try {
+        const chatRes = await callAiWithProxyFallback('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+          },
+          body: {
+            model: modelCandidate,
+            messages: [{ role: 'user', content: 'Say OK' }],
+            max_tokens: 10,
+          },
+          timeoutMs: 9000,
+        });
+
+        if (chatRes.ok) {
+          setGroqModel(modelCandidate);
+          const activeVision = discoveredVisionModel || 'meta-llama/llama-4-scout-17b-16e-instruct';
+          setGroqVisionModel(activeVision);
+          return {
+            ok: true,
+            message: `Groq (Ultra Fast) API key verified successfully! Active model: ${modelCandidate} | Vision: ${activeVision}`,
+          };
+        }
+
+        lastStatus = chatRes.status;
+        const errMsg =
+          chatRes.data?.error?.message ||
+          chatRes.data?.error ||
+          chatRes.data?.message ||
+          `HTTP ${chatRes.status}`;
+        lastError = errMsg;
+
+        if (chatRes.status === 401 || chatRes.status === 403) {
+          return {
+            ok: false,
+            message: `Groq Authentication Failed (HTTP ${chatRes.status}): Invalid API key. Please check your key at console.groq.com.`,
+          };
+        }
+
+        if (chatRes.status === 429) {
+          return {
+            ok: false,
+            message: `Groq Rate Limit Exceeded (HTTP 429): Quota exhausted or rate limit hit on console.groq.com.`,
+          };
+        }
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+      }
+    }
+
+    if (lastStatus === 404) {
+      return {
+        ok: false,
+        message: `Groq Model Not Found (HTTP 404): Requested model is not available. Recommended: llama-3.3-70b-versatile.`,
+      };
+    }
+
+    return {
+      ok: false,
+      message: `Groq Error: ${lastError || 'Could not connect to api.groq.com'}`,
+    };
+  }
+
+  // 5. OpenAI, DeepSeek, Custom (OpenAI-Compatible APIs)
   const baseUrl = pid === 'custom' ? getCustomBaseUrl() : config.baseUrl;
   const modelName = pid === 'custom' ? getCustomModel() : config.defaultModel;
   const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
@@ -394,11 +581,22 @@ export async function testApiKey(
       return { ok: true, message: `${config.name} API key verified and operational!` };
     }
 
+    const status = proxyResult.status;
     const detail =
       proxyResult.data?.error?.message ||
       proxyResult.data?.error ||
       proxyResult.data?.message ||
-      `HTTP ${proxyResult.status}`;
+      `HTTP ${status}`;
+
+    if (status === 401 || status === 403) {
+      return { ok: false, message: `${config.name} Authentication Failed: Invalid API key.` };
+    }
+    if (status === 404) {
+      return { ok: false, message: `${config.name} Model Not Found (404): Model '${modelName}' was not found.` };
+    }
+    if (status === 429) {
+      return { ok: false, message: `${config.name} Rate Limit / Quota Exceeded (429).` };
+    }
 
     return { ok: false, message: `${config.name} Error: ${detail}` };
   } catch (err: any) {

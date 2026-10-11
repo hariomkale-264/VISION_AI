@@ -87,7 +87,7 @@ export function useContinuousMic() {
       // 2. Check internet connectivity
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         const offlineMsg = 'You are offline.';
-        console.error('Network offline: navigator.onLine is false');
+        console.warn('Network offline: navigator.onLine is false');
         setLastErrorDebug('You are offline.');
         speechQueue.speak(offlineMsg, SpeechPriority.ASSISTANT_REPLY);
         return;
@@ -151,7 +151,7 @@ export function useContinuousMic() {
   const safeStartRecognition = useCallback(() => {
     if (!SpeechRecognitionAPI) {
       const err = 'Speech recognition not supported in this browser. Please use Google Chrome.';
-      console.error(err);
+      console.warn(err);
       setLastErrorDebug(err);
       setMicStatus('error');
       return;
@@ -271,14 +271,17 @@ export function useContinuousMic() {
 
     // Requirement 1: Handle recognition.onerror with real error value and announcements
     recognition.onerror = (event: any) => {
-      const err = event.error;
-      console.error('[SpeechRecognition onerror]', err, event);
-      setLastErrorDebug(`event.error: ${err}`);
+      const err = String(event?.error || '').toLowerCase().trim();
 
-      // no-speech / aborted: do NOT count as failures; just restart quietly
-      if (err === 'no-speech' || err === 'aborted') {
+      // no-speech / aborted: routine SpeechRecognition lifecycle events, NOT failures.
+      // - 'no-speech' occurs during periods of silence and is expected in continuous listening.
+      // - 'aborted' occurs when recognition is intentionally stopped (e.g. before TTS speaks or on pause).
+      if (!err || err === 'no-speech' || err === 'aborted' || err.includes('no-speech') || err.includes('aborted')) {
         return;
       }
+
+      console.warn('[Mic] Recognition error event:', err);
+      setLastErrorDebug(`event.error: ${err}`);
 
       // Count real error
       consecutiveErrorCountRef.current += 1;
