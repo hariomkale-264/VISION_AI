@@ -14,6 +14,7 @@ import { useWakeLock } from './hooks/useWakeLock';
 import { useRealtimeStatus } from './hooks/useRealtimeStatus';
 import { registerVoiceRouterProviders } from './services/voiceRouter';
 import { registerLocalCommandProviders } from './services/localCommandRouter';
+import { switchTab } from './services/tabNavigation';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { LiveStatusStrip } from './components/LiveStatusStrip';
@@ -128,7 +129,7 @@ export default function App() {
             }
           }
 
-          useAppStore.getState().setActiveTab('navigation');
+          switchTab('navigation', { source: 'system' });
           useAppStore.getState().setTapOverlay(null);
           speechQueue.speak('Welcome back', SpeechPriority.NAVIGATION);
 

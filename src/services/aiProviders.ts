@@ -38,8 +38,8 @@ export const AI_PROVIDERS: Record<AIProviderId, ProviderConfig> = {
     id: 'groq',
     name: 'Groq (Ultra Fast)',
     tagline: 'Ultra-fast LPU inference (gsk_... keys)',
-    defaultModel: 'llama-3.3-70b-versatile',
-    fallbackModel: 'llama-3.1-8b-instant',
+    defaultModel: 'openai/gpt-oss-120b',
+    fallbackModel: 'qwen/qwen3.8-27b',
     storageKey: 'vision_ai_groq_key',
     baseUrl: 'https://api.groq.com/openai/v1',
     supportsVision: true,
@@ -160,7 +160,7 @@ export function getGroqVisionModel(): string {
       }
     } catch (_) {}
   }
-  return 'meta-llama/llama-4-scout-17b-16e-instruct';
+  return 'qwen/qwen3.8-27b';
 }
 
 export function setGroqVisionModel(model: string): void {

@@ -177,10 +177,18 @@ async function callAiWithProxyFallback(
  * Tests the key against whichever provider is selected (Gemini, Grok, DeepSeek, OpenAI, Claude, Custom).
  * Extracts human-readable errors and tests both models and chat completions.
  */
+export interface ApiKeyTestResult {
+  ok: boolean;
+  message: string;
+  discoveredModels?: string[];
+  activeModel?: string;
+  activeVisionModel?: string;
+}
+
 export async function testApiKey(
   keyToTest: string,
   providerId?: AIProviderId
-): Promise<{ ok: boolean; message: string }> {
+): Promise<ApiKeyTestResult> {
   const key = keyToTest.trim();
   if (!key) {
     return { ok: false, message: 'Please provide an API key to test.' };
@@ -472,9 +480,9 @@ export async function testApiKey(
 
         const visionMatch = discoveredModels.find(
           (m) =>
+            m.includes('qwen') ||
             m.includes('llama-4-scout') ||
             m.includes('llama-4-maverick') ||
-            m.includes('qwen3.8') ||
             m.includes('vision')
         );
         if (visionMatch) {
@@ -483,11 +491,58 @@ export async function testApiKey(
       }
     } catch (_) {}
 
+    // Exclude audio/speech/moderation models that cannot do chat completions
+    const isChatModel = (id: string) => {
+      const lower = id.toLowerCase();
+      return (
+        !lower.startsWith('whisper') &&
+        !lower.includes('orpheus') &&
+        !lower.includes('prompt-guard') &&
+        !lower.includes('safeguard') &&
+        !lower.includes('embed')
+      );
+    };
+    const chatDiscovered = discoveredModels.filter(isChatModel);
+
     const candidateModels: string[] = [];
-    if (configuredModel && !configuredModel.includes('llama-3.2-11b-vision-preview')) {
+    if (configuredModel && chatDiscovered.includes(configuredModel)) {
       candidateModels.push(configuredModel);
     }
-    candidateModels.push('llama-3.3-70b-versatile', 'llama-3.1-8b-instant');
+
+    const preferredOrder = [
+      'openai/gpt-oss-120b',
+      'qwen/qwen3.8-27b',
+      'openai/gpt-oss-20b',
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+      'meta-llama/llama-4-maverick-17b-128e-instruct',
+      'mixtral-8x7b-32768',
+      'allam-2-7b',
+    ];
+
+    for (const p of preferredOrder) {
+      if (chatDiscovered.includes(p) && !candidateModels.includes(p)) {
+        candidateModels.push(p);
+      }
+    }
+
+    for (const m of chatDiscovered) {
+      if (!candidateModels.includes(m)) {
+        candidateModels.push(m);
+      }
+    }
+
+    if (candidateModels.length === 0) {
+      if (configuredModel) candidateModels.push(configuredModel);
+      candidateModels.push(
+        'openai/gpt-oss-120b',
+        'qwen/qwen3.8-27b',
+        'openai/gpt-oss-20b',
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant'
+      );
+    }
 
     let lastError = '';
     let lastStatus = 0;
@@ -510,11 +565,14 @@ export async function testApiKey(
 
         if (chatRes.ok) {
           setGroqModel(modelCandidate);
-          const activeVision = discoveredVisionModel || 'meta-llama/llama-4-scout-17b-16e-instruct';
+          const activeVision = discoveredVisionModel || 'qwen/qwen3.8-27b';
           setGroqVisionModel(activeVision);
           return {
             ok: true,
             message: `Groq (Ultra Fast) API key verified successfully! Active model: ${modelCandidate} | Vision: ${activeVision}`,
+            discoveredModels: chatDiscovered,
+            activeModel: modelCandidate,
+            activeVisionModel: activeVision,
           };
         }
 
@@ -545,9 +603,10 @@ export async function testApiKey(
     }
 
     if (lastStatus === 404) {
+      const avail = chatDiscovered.length > 0 ? chatDiscovered.slice(0, 4).join(', ') : 'None discovered';
       return {
         ok: false,
-        message: `Groq Model Not Found (HTTP 404): Requested model is not available. Recommended: llama-3.3-70b-versatile.`,
+        message: `Groq Model Not Found (HTTP 404): No available chat model found on your Groq account. Available models: ${avail}`,
       };
     }
 

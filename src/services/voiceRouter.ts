@@ -9,6 +9,7 @@ import { speechQueue, SpeechPriority } from './speechQueue';
 import { handleEmergencySos } from './intentRouter';
 import { describeSurroundings, readTextFromImage } from './gemini';
 import { getApiKey, notifyApiKeyMissing } from './apiKey';
+import { matchTabVoiceIntent, switchTab } from './tabNavigation';
 import {
   openGoogleMaps,
   handleTravelModeAnswer,
@@ -270,7 +271,17 @@ export interface NavigationIntentParse {
 export function matchTabFromSpeech(rawText: string): { isTab: boolean; tab?: ActiveTab; confirmation?: string } {
   if (!rawText) return { isTab: false };
 
-  // 1. Clean the incoming text
+  // 1. Check primary explicit tab intent matcher
+  const explicit = matchTabVoiceIntent(rawText);
+  if (explicit.isTab && explicit.tab) {
+    return {
+      isTab: true,
+      tab: explicit.tab,
+      confirmation: explicit.confirmation,
+    };
+  }
+
+  // 2. Clean the incoming text
   const cleaned = cleanSpokenText(rawText);
   if (!cleaned) return { isTab: false };
 
@@ -550,14 +561,104 @@ export async function routeVoiceCommand(rawText: string): Promise<VoiceRouteResu
   }
 
   // -----------------------------------------------------------------
-  // STEP 3 Check 1: FIRST check: Is window.isWaitingForDestination === true?
-  // If yes: window.isWaitingForDestination = false; startNavigation(spokenText); return;
+  // STEP 2.5: EXPLICIT EXTERNAL GOOGLE MAPS REQUEST
+  // "open google maps for [place]", "open in google maps", "launch google maps"
+  // -----------------------------------------------------------------
+  const isExplicitGoogleMaps =
+    /\b(?:open|launch|show in|switch to|use)\s+(?:external\s+)?google\s+maps?\b/i.test(rawText) ||
+    /\bgoogle\s+maps?\s+(?:for|to|directions?)\b/i.test(rawText);
+
+  if (isExplicitGoogleMaps) {
+    let gDest = rawText
+      .replace(/^(?:please\s+)?(?:open|launch|show in|switch to|use)\s+(?:external\s+)?google\s+maps?(?:\s+(?:for|to|towards))?/i, '')
+      .replace(/.*?\bgoogle\s+maps?\s+(?:for|to)\s+/i, '')
+      .replace(/[.,?!]+$/, '')
+      .trim();
+
+    if (!gDest) {
+      gDest = app.destination || '';
+    }
+
+    if (gDest) {
+      await openGoogleMaps(gDest, { heardText: rawText });
+      return {
+        matched: true,
+        commandName: 'open_external_google_maps',
+        spokenReply: `Opening Google Maps for ${gDest}`,
+      };
+    } else {
+      const askPrompt = 'Which destination would you like to open in Google Maps?';
+      await speak(askPrompt);
+      return {
+        matched: true,
+        commandName: 'open_google_maps_ask',
+        spokenReply: askPrompt,
+      };
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // 1. VOICE-CONTROLLED TAB SWITCHING (Priority 1)
+  // Maps spoken commands to all application sidebar tabs:
+  // Dashboard, Detection, Navigation, Voice, Emergency, Settings
+  // -----------------------------------------------------------------
+  const tabIntent = matchTabVoiceIntent(rawText);
+  if (tabIntent.isTab && tabIntent.tab) {
+    const switchRes = switchTab(tabIntent.tab, {
+      source: 'voice',
+      spokenNotice: true,
+    });
+    app.setLastTranscript(rawText.trim());
+    stats.recordVoiceCommandSuccess(
+      rawText.trim() || `switch to ${tabIntent.tab}`,
+      switchRes.message
+    );
+
+    // If Navigation was newly opened without a destination, prompt for one
+    if (tabIntent.tab === 'navigation' && !switchRes.alreadyActive) {
+      const askText = 'Where do you want to go?';
+      await speak(askText);
+      if (typeof window !== 'undefined') {
+        window.isWaitingForDestination = true;
+      }
+      app.setIsPendingDestination(true);
+      return {
+        matched: true,
+        commandName: 'navigate_ask',
+        spokenReply: `${switchRes.message}. ${askText}`,
+      };
+    }
+
+    return {
+      matched: true,
+      commandName: `switch_to_${tabIntent.tab}`,
+      spokenReply: switchRes.message,
+    };
+  }
+
+  // -----------------------------------------------------------------
+  // STEP 3 Check 1: Pending Destination Answer
+  // If window.isWaitingForDestination === true and user did NOT switch tabs
   // -----------------------------------------------------------------
   const isWaiting =
     (typeof window !== 'undefined' && (window as any).isWaitingForDestination === true) ||
     app.isPendingDestination;
 
   if (isWaiting) {
+    const isCancel = /^(?:cancel|stop|never\s+mind|exit|back|close|abort)$/i.test(cleaned);
+    if (isCancel) {
+      if (typeof window !== 'undefined') {
+        (window as any).isWaitingForDestination = false;
+      }
+      app.setIsPendingDestination(false);
+      speechQueue.speak('Navigation cancelled', SpeechPriority.NAVIGATION);
+      return {
+        matched: true,
+        commandName: 'cancel_navigation_destination',
+        spokenReply: 'Navigation cancelled',
+      };
+    }
+
     if (typeof window !== 'undefined') {
       (window as any).isWaitingForDestination = false;
     }

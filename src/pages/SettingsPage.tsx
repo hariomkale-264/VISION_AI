@@ -243,13 +243,16 @@ export const SettingsPage: React.FC = () => {
       });
 
       if (res.ok) {
+        if ((res as any).discoveredModels && (res as any).discoveredModels.length > 0) {
+          setDiscoveredModels((res as any).discoveredModels);
+        }
         // Sync model states after successful test verification
         if (selectedProvider === 'grok') {
           setGrokModelInput(getGrokModel());
           setGrokVisionModelInput(getGrokVisionModel());
         } else if (selectedProvider === 'groq') {
-          setGroqModelInput(getGroqModel());
-          setGroqVisionModelInput(getGroqVisionModel());
+          setGroqModelInput((res as any).activeModel || getGroqModel());
+          setGroqVisionModelInput((res as any).activeVisionModel || getGroqVisionModel());
         }
         speechQueue.speak('API key verified and operational.', SpeechPriority.STATUS);
         setKeyMissingAlert(false);
@@ -541,14 +544,26 @@ export const SettingsPage: React.FC = () => {
                   onChange={(e) => setGroqModelInput(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
                 >
-                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended)</option>
-                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fastest)</option>
+                  <option value="openai/gpt-oss-120b">openai/gpt-oss-120b (Recommended High-Speed 120B)</option>
+                  <option value="qwen/qwen3.8-27b">qwen/qwen3.8-27b (Qwen Multimodal & Reasoning)</option>
+                  <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Ultra-Fast 20B)</option>
+                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Llama 3.3 70B)</option>
+                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fastest 8B)</option>
                   <option value="mixtral-8x7b-32768">mixtral-8x7b-32768 (MoE)</option>
                   {discoveredModels
                     .filter(
                       (m) =>
-                        !['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'].includes(m) &&
-                        !m.includes('vision')
+                        ![
+                          'openai/gpt-oss-120b',
+                          'qwen/qwen3.8-27b',
+                          'openai/gpt-oss-20b',
+                          'llama-3.3-70b-versatile',
+                          'llama-3.1-8b-instant',
+                          'mixtral-8x7b-32768',
+                        ].includes(m) &&
+                        !m.includes('whisper') &&
+                        !m.includes('orpheus') &&
+                        !m.includes('guard')
                     )
                     .map((m) => (
                       <option key={m} value={m}>
@@ -565,23 +580,23 @@ export const SettingsPage: React.FC = () => {
                   onChange={(e) => setGroqVisionModelInput(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
                 >
+                  <option value="qwen/qwen3.8-27b">
+                    qwen/qwen3.8-27b (Recommended Qwen Multimodal)
+                  </option>
                   <option value="meta-llama/llama-4-scout-17b-16e-instruct">
-                    meta-llama/llama-4-scout-17b-16e-instruct (Recommended Vision)
+                    meta-llama/llama-4-scout-17b-16e-instruct (Llama 4 Scout Vision)
                   </option>
                   <option value="meta-llama/llama-4-maverick-17b-128e-instruct">
                     meta-llama/llama-4-maverick-17b-128e-instruct (High-Capacity Vision)
-                  </option>
-                  <option value="qwen/qwen3.8-27b">
-                    qwen/qwen3.8-27b (Qwen Multimodal)
                   </option>
                   {discoveredModels
                     .filter(
                       (m) =>
                         (m.includes('scout') || m.includes('maverick') || m.includes('qwen') || m.includes('vision')) &&
                         ![
+                          'qwen/qwen3.8-27b',
                           'meta-llama/llama-4-scout-17b-16e-instruct',
                           'meta-llama/llama-4-maverick-17b-128e-instruct',
-                          'qwen/qwen3.8-27b',
                         ].includes(m)
                     )
                     .map((m) => (

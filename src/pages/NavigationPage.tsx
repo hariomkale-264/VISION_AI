@@ -41,11 +41,11 @@ export const NavigationPage: React.FC = () => {
     setIsSearching(true);
     setQuery('');
 
-    // Trigger openGoogleMaps everywhere (search bar, voice, buttons)
+    // Trigger startNavigation inside Vision AI
     try {
-      await openGoogleMaps(dest, { heardText: dest });
+      await startNavigation(dest);
     } catch (err) {
-      console.error('openGoogleMaps error:', err);
+      console.error('startNavigation error:', err);
     } finally {
       setIsSearching(false);
     }
@@ -100,18 +100,14 @@ export const NavigationPage: React.FC = () => {
         </div>
       </form>
 
-      {/* STEP 5: Big High-Contrast Fallback Walking Navigation Button */}
+      {/* STEP 5: Big High-Contrast In-App Walking Navigation Button */}
       {activeNavDestination && (
         <div className="w-full">
           <button
             onClick={() => {
-              if (googleMapsNav?.url) {
-                performRedirect(googleMapsNav.url);
-              } else {
-                startNavigation(activeNavDestination);
-              }
+              startNavigation(activeNavDestination);
             }}
-            aria-label={`Tap to start walking navigation to ${activeNavDestination}`}
+            aria-label={`Tap to start voice-guided walking navigation to ${activeNavDestination}`}
             className={`w-full py-6 px-6 sm:px-8 rounded-3xl font-black text-xl sm:text-2xl shadow-2xl border-4 transition-all transform active:scale-95 flex items-center justify-center gap-4 cursor-pointer min-h-[84px] ${
               highContrast
                 ? 'bg-yellow-400 text-black border-white hover:bg-yellow-300'
@@ -120,9 +116,8 @@ export const NavigationPage: React.FC = () => {
           >
             <Navigation className="w-8 h-8 shrink-0 fill-current" />
             <span className="text-center font-extrabold tracking-tight leading-snug">
-              Tap to start walking navigation to {activeNavDestination}
+              {navigationActive ? `Navigating to ${activeNavDestination}` : `Start Voice Walking Navigation to ${activeNavDestination}`}
             </span>
-            <ExternalLink className="w-7 h-7 shrink-0" />
           </button>
         </div>
       )}

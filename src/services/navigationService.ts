@@ -9,6 +9,7 @@ import { searchDestination, reverseGeocode } from './geocode';
 import { calculateHaversineDistance, formatDistance } from '../utils/haversine';
 import { getWalkingRoute } from './routing';
 import { speechQueue, SpeechPriority } from './speechQueue';
+import { switchTab } from './tabNavigation';
 
 export interface OpenGoogleMapsOptions {
   origin?: string;
@@ -67,6 +68,11 @@ export function speak(text: string): Promise<void> {
  * Direct voice-triggered navigation handler.
  * Does NOT depend on the Navigation tab being open or rendered.
  */
+/**
+ * Direct voice-triggered and UI-triggered navigation handler.
+ * Runs inside Vision AI with Leaflet map and continuous turn-by-turn voice guidance.
+ * Does NOT redirect to Google Maps by default (keeps Vision AI assistant alive).
+ */
 export async function startNavigation(rawInput: string): Promise<void> {
   console.log('[Nav] startNavigation called with:', rawInput);
 
@@ -106,78 +112,128 @@ export async function startNavigation(rawInput: string): Promise<void> {
   }
   useAppStore.getState().setIsPendingDestination(false);
 
-  // 2. Announce immediately to blind user
-  await speak(`Starting navigation to ${destination}`);
+  // 2. Announce initial search to blind user
+  await speak(`Looking up walking route to ${destination}`);
 
-  // 3. Get current location (with timeout fallback)
-  let origin = '';
+  // 3. Resolve user's current GPS location
+  let userLat: number | null = null;
+  let userLng: number | null = null;
+
   try {
     const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-      navigator.geolocation?.getCurrentPosition(resolve, reject, {
-        timeout: 3000,
-        enableHighAccuracy: false,
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation not supported'));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        timeout: 5000,
+        enableHighAccuracy: true,
       });
     });
-    origin = `${pos.coords.latitude},${pos.coords.longitude}`;
-    console.log('[Nav] Got GPS coordinates:', origin);
-  } catch (err) {
-    console.log('[Nav] GPS not available or timed out, Maps will use device location');
+    userLat = pos.coords.latitude;
+    userLng = pos.coords.longitude;
+    useAppStore.getState().setCurrentLocation({
+      lat: userLat,
+      lng: userLng,
+      accuracy: pos.coords.accuracy,
+      speed: pos.coords.speed != null ? Math.max(0, pos.coords.speed) : 0,
+    });
+  } catch (geoErr) {
+    console.warn('[Nav] Live GPS fetch timed out or denied, falling back to stored location:', geoErr);
     const storeLoc = useAppStore.getState().currentLocation;
     if (storeLoc.lat != null && storeLoc.lng != null) {
-      origin = `${storeLoc.lat},${storeLoc.lng}`;
+      userLat = storeLoc.lat;
+      userLng = storeLoc.lng;
     }
   }
 
-  // 4. Build URL
-  const encoded = encodeURIComponent(destination);
-  const mapsUrl = origin
-    ? `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${encoded}&travelmode=walking`
-    : `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=walking`;
-
-  console.log('[Nav] Redirecting to:', mapsUrl);
-
-  // Update App State for Navigation Tab and Activity
-  const app = useAppStore.getState();
-  const stats = useStatsStore.getState();
-  app.setActiveTab('navigation');
-  app.setGoogleMapsNav({
-    destination,
-    geocodedName: destination,
-    url: mapsUrl,
-    travelmode: 'walking',
-    heardTranscript: rawInput,
-    popupBlocked: false,
-    status: 'active',
-    redirectMethod: 'window.open / location.href',
-  });
-  app.setNavDebugInfo({
-    heardText: rawInput,
-    extractedDest: destination,
-    geocodedPlace: destination,
-    finalUrl: mapsUrl,
-    redirectMethod: 'window.open / location.href',
-    timestamp: Date.now(),
-  });
-  stats.recordVoiceCommandSuccess(`navigate to ${destination}`, `Walking navigation to ${destination}`);
-
-  // STEP 4: Make sure Speech Synthesis finishes before redirect
-  // Wait a brief moment (e.g. 1.5 seconds) so the user hears the confirmation before the page leaves
-  await new Promise((r) => setTimeout(r, 1500));
-
-  // 5. Open Google Maps
-  // Try window.open first, fallback to window.location.href
-  // (blind users cannot see new tabs, so location.href is often preferred on mobile)
-  let opened: Window | null = null;
-  try {
-    opened = window.open(mapsUrl, '_blank');
-  } catch (e) {
-    console.warn('[Nav] window.open failed:', e);
+  if (userLat == null || userLng == null) {
+    await speak('Cannot obtain your current location. Please enable GPS permissions and try again.');
+    return;
   }
 
-  if (!opened || opened.closed || typeof opened.closed === 'undefined') {
-    // Popup was blocked or on mobile PWA -> redirect directly
-    console.log('[Nav] Popup was blocked or on mobile PWA -> redirect directly');
-    performRedirect(mapsUrl);
+  // 4. Geocode destination using Nominatim
+  let bestMatch: any = null;
+  try {
+    const matches = await searchDestination(destination, userLat, userLng);
+    if (matches && matches.length > 0) {
+      bestMatch = matches[0];
+    }
+  } catch (searchErr) {
+    console.warn('[Nav] Geocoding lookup error:', searchErr);
+  }
+
+  if (!bestMatch || bestMatch.lat == null || bestMatch.lng == null) {
+    await speak(`Could not find location coordinates for ${destination}. Please try another destination.`);
+    return;
+  }
+
+  const destDisplayName = bestMatch.name || destination;
+  const destCoords: [number, number] = [bestMatch.lat, bestMatch.lng];
+  const distanceDirectM = calculateHaversineDistance(userLat, userLng, bestMatch.lat, bestMatch.lng);
+
+  // 5. Calculate walking route via OSRM
+  try {
+    const route = await getWalkingRoute(userLat, userLng, bestMatch.lat, bestMatch.lng);
+
+    const app = useAppStore.getState();
+    const stats = useStatsStore.getState();
+
+    // Switch to Navigation view so the Leaflet map and step cards are visible
+    switchTab('navigation', { source: 'system' });
+
+    // Start in-app navigation
+    app.startNavigation(
+      destDisplayName,
+      destCoords,
+      route.coordinates,
+      route.steps,
+      route.distanceMeters,
+      route.durationSeconds
+    );
+
+    // Build Google Maps fallback URL (for manual user request or Re-open button)
+    const encodedDest = encodeURIComponent(`${bestMatch.lat.toFixed(6)},${bestMatch.lng.toFixed(6)}`);
+    const mapsFallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${userLat},${userLng}&destination=${encodedDest}&travelmode=walking`;
+
+    app.setGoogleMapsNav({
+      destination: destDisplayName,
+      geocodedName: bestMatch.displayName || destDisplayName,
+      url: mapsFallbackUrl,
+      travelmode: 'walking',
+      heardTranscript: rawInput,
+      popupBlocked: false,
+      lat: bestMatch.lat,
+      lng: bestMatch.lng,
+      distanceKm: Math.round(route.distanceMeters / 1000) || undefined,
+      status: 'active',
+      redirectMethod: 'internal Vision AI navigation',
+    });
+
+    app.setNavDebugInfo({
+      heardText: rawInput,
+      extractedDest: destination,
+      geocodedPlace: bestMatch.displayName || destDisplayName,
+      finalUrl: mapsFallbackUrl,
+      redirectMethod: 'internal Vision AI navigation',
+      timestamp: Date.now(),
+    });
+
+    stats.recordVoiceCommandSuccess(`navigate to ${destination}`, `Internal walking route to ${destDisplayName}`);
+    stats.addActivity({
+      type: 'navigation',
+      title: `Route to ${destDisplayName}`,
+      detail: `${formatDistance(route.distanceMeters)}, ~${Math.ceil(route.durationSeconds / 60)} min walk`,
+      status: 'Completed',
+    });
+
+    // 6. Speak clear start instruction
+    const firstStep = route.steps[0]?.instruction || `Head toward ${destDisplayName}`;
+    const initialAnnouncement = `Navigation started for ${destDisplayName}. Route distance is ${formatDistance(route.distanceMeters)}. ${firstStep}`;
+    await speak(initialAnnouncement);
+  } catch (routeErr: any) {
+    console.error('[Nav] Failed to calculate walking route:', routeErr);
+    await speak(`Unable to calculate walking route to ${destDisplayName}. Direct distance is ${formatDistance(distanceDirectM)}.`);
   }
 }
 
@@ -310,8 +366,8 @@ function extractCurrentCity(address?: string): string {
 }
 
 /**
- * Master openGoogleMaps function used everywhere (voice, search bar, buttons).
- * Never uses window.open. Redirects current page automatically.
+ * Master openGoogleMaps function for launching external Google Maps when explicitly requested by user.
+ * Opens Google Maps in a new tab if possible or redirects, providing an accessible external fallback.
  */
 export async function openGoogleMaps(
   destinationInput: string,
@@ -345,13 +401,6 @@ export async function openGoogleMaps(
       if (userLat != null && userLng != null) {
         distanceMeters = calculateHaversineDistance(userLat, userLng, bestMatch.lat, bestMatch.lng);
       }
-
-      // If Nominatim match name has a slight spelling variation, inform the user
-      const cleanQ = query.toLowerCase();
-      const cleanMatch = (bestMatch.name || '').toLowerCase();
-      if (cleanMatch && !cleanQ.includes(cleanMatch) && !cleanMatch.includes(cleanQ)) {
-        speechQueue.speak(`Matching place: ${bestMatch.name}.`, SpeechPriority.STATUS);
-      }
     }
   } catch (geoErr) {
     console.warn('Nominatim lookup error:', geoErr);
@@ -383,6 +432,8 @@ export async function openGoogleMaps(
 
   if (options.origin) {
     mapsUrl += `&origin=${encodeURIComponent(options.origin)}`;
+  } else if (userLat != null && userLng != null) {
+    mapsUrl += `&origin=${userLat},${userLng}`;
   }
 
   if (app.autoStartTurnByTurn) {
@@ -391,43 +442,9 @@ export async function openGoogleMaps(
 
   const destinationDisplayName = bestMatch ? bestMatch.name : query;
   const heardText = options.heardText || query;
-  let redirectMethod = 'href / anchor';
+  let redirectMethod = 'window.open / external fallback';
 
-  // 4. Calculate guidance route and start in-app navigation if location available
-  let guidanceAnnounced = false;
-  if (userLat != null && userLng != null && bestMatch?.lat != null && bestMatch?.lng != null) {
-    try {
-      const route = await getWalkingRoute(userLat, userLng, bestMatch.lat, bestMatch.lng);
-      app.startNavigation(
-        destinationDisplayName,
-        [bestMatch.lat, bestMatch.lng],
-        route.coordinates,
-        route.steps,
-        route.distanceMeters,
-        route.durationSeconds
-      );
-      app.setActiveTab('navigation');
-
-      const firstStep = route.steps[0]?.instruction || `Proceed toward ${destinationDisplayName}`;
-      const distDesc = distanceMeters ? `about ${formatDistance(distanceMeters)} away` : '';
-      speechQueue.speak(
-        `Starting guidance to ${destinationDisplayName}${distDesc ? ', ' + distDesc : ''}. ${firstStep}. Redirecting to Google Maps.`,
-        SpeechPriority.NAVIGATION
-      );
-      guidanceAnnounced = true;
-
-      stats.addActivity({
-        type: 'navigation',
-        title: `Route to ${destinationDisplayName}`,
-        detail: `${formatDistance(route.distanceMeters)}, ~${Math.ceil(route.durationSeconds / 60)} min walk`,
-        status: 'Completed',
-      });
-    } catch (routeErr) {
-      console.warn('In-app routing warning:', routeErr);
-    }
-  }
-
-  // 5. Update state & debug line
+  // 4. Update state & debug line
   const debugLine = {
     heardText,
     extractedDest: query,
@@ -452,12 +469,9 @@ export async function openGoogleMaps(
     redirectMethod,
   });
 
-  stats.recordVoiceCommandSuccess(`navigate to ${destinationDisplayName}`, `Starting guidance & Google Maps (${chosenMode})`);
+  stats.recordVoiceCommandSuccess(`open Google Maps for ${destinationDisplayName}`, `Opening Google Maps (${chosenMode})`);
 
-  // 6. Loading behavior:
-  if (!guidanceAnnounced) {
-    speechQueue.speak(`Starting guidance to ${destinationDisplayName}. Opening Google Maps.`, SpeechPriority.NAVIGATION);
-  }
+  speechQueue.speak(`Opening Google Maps for ${destinationDisplayName}. Note that Vision AI assistant cannot speak continuously once you leave the browser.`, SpeechPriority.NAVIGATION);
 
   if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     try {
@@ -484,41 +498,18 @@ export async function openGoogleMaps(
     localStorage.setItem('vision_ai_has_left_for_maps', 'true');
   } catch {}
 
-  // Wait 600 ms so speech starts cleanly
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  // Wait 1.2s so speech warning completes before navigating away
+  await new Promise((resolve) => setTimeout(resolve, 1200));
 
-  // Perform immediate redirect
-  performRedirect(mapsUrl);
+  // Try window.open first so Vision AI tab remains open in background
+  let opened: Window | null = null;
+  try {
+    opened = window.open(mapsUrl, '_blank');
+  } catch (e) {
+    console.warn('[Nav] window.open error:', e);
+  }
 
-  // 6. Multi-stage Fallback if redirect is blocked
-  // Step A: 1.5s check -> Android Intent
-  setTimeout(() => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
-      if (isAndroid) {
-        redirectMethod = 'intent';
-        debugLine.redirectMethod = redirectMethod;
-        app.setNavDebugInfo({ ...debugLine });
-
-        const dirActionParam = app.autoStartTurnByTurn ? '&dir_action=navigate' : '';
-        const intentUrl = `intent://maps.google.com/maps/dir/?api=1&destination=${destParam}&travelmode=${chosenMode}${dirActionParam}#Intent;scheme=https;package=com.google.android.apps.maps;end`;
-        performRedirect(intentUrl);
-      }
-    }
-  }, 1500);
-
-  // Step B: 3.0s check -> Full-Screen Tap Target Overlay
-  setTimeout(() => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      redirectMethod = 'tap overlay';
-      debugLine.redirectMethod = redirectMethod;
-      app.setNavDebugInfo({ ...debugLine });
-
-      app.setTapOverlay({
-        active: true,
-        url: mapsUrl,
-        destination: destinationDisplayName,
-      });
-    }
-  }, 3000);
+  if (!opened || opened.closed || typeof opened.closed === 'undefined') {
+    performRedirect(mapsUrl);
+  }
 }

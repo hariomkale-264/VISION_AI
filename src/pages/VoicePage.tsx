@@ -18,7 +18,7 @@ export const VoicePage: React.FC<VoicePageProps> = ({ onStartMic, onStopMic }) =
   const highContrast = useAppStore((s) => s.highContrast);
 
   const sampleCommands = [
-    { cmd: 'Open Settings / Dashboard / Navigation / Detection', desc: 'Switches tabs instantly offline (EN/HI/MR)' },
+    { cmd: 'Switch to / Open / Go to [Tab]', desc: 'Switches between all 6 tabs: Dashboard, Detection, Navigation, Voice, Emergency, Settings' },
     { cmd: 'Start detection', desc: 'Activates camera and real-time obstacle scan' },
     { cmd: 'Stop detection', desc: 'Turns off camera immediately and clears boxes' },
     { cmd: 'Describe scene / What is in front of me?', desc: 'Analyzes hazards, stairs, walls, poles, and ground' },

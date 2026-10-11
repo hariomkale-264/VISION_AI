@@ -16,7 +16,10 @@
               msg.includes('WebSocket closed without opened') ||
               (msg.includes('WebSocket') && msg.includes('closed')) ||
               msg.includes('vite-hmr') ||
-              msg.includes('vite-ping')
+              msg.includes('vite-ping') ||
+              msg.includes('SpeechRecognition onerror') ||
+              msg.includes('no-speech') ||
+              msg.includes('aborted')
             ) {
               return;
             }
@@ -24,14 +27,14 @@
           return origConsoleError.apply(console, arguments);
         };
 
-        var isWsError = function(msg) {
+        var isIgnoredError = function(msg) {
           if (!msg) return false;
           var s = String(msg);
-          return s.includes('WebSocket') || s.includes('ws://') || s.includes('wss://') || s.includes('vite-hmr') || s.includes('vite-ping');
+          return s.includes('WebSocket') || s.includes('ws://') || s.includes('wss://') || s.includes('vite-hmr') || s.includes('vite-ping') || s.includes('no-speech') || s.includes('aborted') || s.includes('SpeechRecognition');
         };
 
         window.addEventListener('error', function(event) {
-          if (event && (isWsError(event.message) || (event.error && isWsError(event.error.message)))) {
+          if (event && (isIgnoredError(event.message) || (event.error && isIgnoredError(event.error.message || event.error)))) {
             event.preventDefault();
             event.stopImmediatePropagation();
             return true;
@@ -40,7 +43,7 @@
 
         window.addEventListener('unhandledrejection', function(event) {
           var reason = event && event.reason ? (event.reason.message || String(event.reason)) : '';
-          if (isWsError(reason)) {
+          if (isIgnoredError(reason)) {
             event.preventDefault();
             event.stopImmediatePropagation();
           }

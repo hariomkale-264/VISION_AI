@@ -14,6 +14,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useAppStore, ActiveTab } from '../store/appStore';
+import { switchTab } from '../services/tabNavigation';
 
 interface NavItem {
   id: ActiveTab;
@@ -81,7 +82,7 @@ export const Sidebar: React.FC = () => {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => switchTab(item.id, { source: 'sidebar' })}
                 aria-current={isActive ? 'page' : undefined}
                 className={`w-full flex items-center gap-3.5 px-4 py-3.5 rounded-2xl font-semibold text-sm transition-all text-left relative focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[50px] ${
                   isActive
@@ -140,7 +141,7 @@ export const Sidebar: React.FC = () => {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => switchTab(item.id, { source: 'sidebar' })}
               aria-label={item.label}
               className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all min-w-[54px] min-h-[54px] ${
                 isActive

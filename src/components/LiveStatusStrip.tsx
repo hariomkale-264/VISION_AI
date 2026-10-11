@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../store/appStore';
 import { useStatsStore } from '../store/statsStore';
+import { switchTab } from '../services/tabNavigation';
 
 export const LiveStatusStrip: React.FC = () => {
   const micStatus = useAppStore((s) => s.micStatus);
@@ -59,7 +60,7 @@ export const LiveStatusStrip: React.FC = () => {
     (lastErrorDebug && lastErrorDebug.includes('Gemini API key is missing'));
 
   const handleGoToSettings = () => {
-    setActiveTab('settings');
+    switchTab('settings', { source: 'link' });
     setKeyMissingAlert(false);
   };
 

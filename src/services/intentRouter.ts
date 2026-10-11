@@ -326,10 +326,21 @@ async function handleNavigateIntent(destinationQuery: string, userSpeech?: strin
       status: 'Completed',
     });
 
-    // Launch Google Maps via unified openGoogleMaps (never window.open)
-    await openGoogleMaps(announceName, {
-      heardText: userSpeech || destinationQuery,
-      explicitMode: 'walking',
+    // Set fallback Google Maps state without redirecting away from Vision AI
+    const encodedDest = encodeURIComponent(`${bestMatch.lat.toFixed(6)},${bestMatch.lng.toFixed(6)}`);
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${userLoc.lat},${userLoc.lng}&destination=${encodedDest}&travelmode=walking`;
+    app.setGoogleMapsNav({
+      destination: announceName,
+      geocodedName: bestMatch.displayName || announceName,
+      url: mapsUrl,
+      travelmode: 'walking',
+      heardTranscript: userSpeech || destinationQuery,
+      popupBlocked: false,
+      lat: bestMatch.lat,
+      lng: bestMatch.lng,
+      distanceKm: Math.round(route.distanceMeters / 1000) || undefined,
+      status: 'active',
+      redirectMethod: 'internal Vision AI navigation',
     });
   } catch (err: any) {
     console.error('Navigation error:', err);

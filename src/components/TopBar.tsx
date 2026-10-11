@@ -20,7 +20,8 @@ import { getWalkingRoute } from '../services/routing';
 import { formatDistance } from '../utils/haversine';
 import { speechQueue, SpeechPriority } from '../services/speechQueue';
 import { useStatsStore } from '../store/statsStore';
-import { openGoogleMaps } from '../services/navigationService';
+import { openGoogleMaps, startNavigation as startVisionNav } from '../services/navigationService';
+import { switchTab } from '../services/tabNavigation';
 
 interface TopBarProps {
   onToggleMic: () => void;
@@ -48,9 +49,9 @@ export const TopBar: React.FC<TopBarProps> = ({ onToggleMic }) => {
     setSearchQuery('');
 
     try {
-      await openGoogleMaps(query, { heardText: query });
+      await startVisionNav(query);
     } catch (err) {
-      console.error('TopBar search openGoogleMaps error:', err);
+      console.error('TopBar search startVisionNav error:', err);
     } finally {
       setIsSearching(false);
     }
@@ -151,7 +152,7 @@ export const TopBar: React.FC<TopBarProps> = ({ onToggleMic }) => {
 
         {/* Settings Button */}
         <button
-          onClick={() => setActiveTab('settings')}
+          onClick={() => switchTab('settings', { source: 'link' })}
           aria-label="Open settings"
           title="Settings"
           className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all shadow-sm ${
