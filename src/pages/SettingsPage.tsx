@@ -125,6 +125,16 @@ export const SettingsPage: React.FC = () => {
     setTestStatus(null);
     setDiscoveredModels([]);
     refreshKeyStatus(pid);
+    if (pid === 'groq') {
+      setGroqModelInput(getGroqModel());
+      setGroqVisionModelInput(getGroqVisionModel());
+    } else if (pid === 'grok') {
+      setGrokModelInput(getGrokModel());
+      setGrokVisionModelInput(getGrokVisionModel());
+    } else if (pid === 'custom') {
+      setCustomBaseUrlInput(getCustomBaseUrl());
+      setCustomModelInput(getCustomModel());
+    }
     speechQueue.speak(`AI provider set to ${AI_PROVIDERS[pid].name}`, SpeechPriority.STATUS);
   };
 
@@ -144,13 +154,42 @@ export const SettingsPage: React.FC = () => {
         setDiscoveredModels(res.models);
         const countMsg = `Found ${res.models.length} models for ${AI_PROVIDERS[selectedProvider].name}.`;
         speechQueue.speak(countMsg, SpeechPriority.STATUS);
+        setTestStatus({
+          tested: true,
+          ok: true,
+          message: countMsg,
+        });
+
+        if (selectedProvider === 'groq') {
+          const chatDiscovered = res.models.filter(
+            (m) =>
+              !m.toLowerCase().startsWith('whisper') &&
+              !m.toLowerCase().includes('prompt-guard') &&
+              !m.toLowerCase().includes('safeguard')
+          );
+          if (chatDiscovered.length > 0 && !chatDiscovered.includes(groqModelInput)) {
+            const preferred = [
+              'llama-3.3-70b-versatile',
+              'llama-3.1-8b-instant',
+              'openai/gpt-oss-120b',
+              'qwen/qwen3.8-27b',
+              'openai/gpt-oss-20b',
+            ].find((p) => chatDiscovered.includes(p)) || chatDiscovered[0];
+            setGroqModelInput(preferred);
+            setGroqModel(preferred);
+          }
+          if (res.visionModels.length > 0 && !res.visionModels.includes(groqVisionModelInput)) {
+            setGroqVisionModelInput(res.visionModels[0]);
+            setGroqVisionModel(res.visionModels[0]);
+          }
+        }
       } else {
         const errMsg = res.error || 'No models returned from endpoint.';
-        speechQueue.speak(`Model discovery failed: ${errMsg}`, SpeechPriority.STATUS);
+        speechQueue.speak(`Model discovery notice: ${errMsg}`, SpeechPriority.STATUS);
         setTestStatus({
           tested: true,
           ok: false,
-          message: `Model discovery: ${errMsg}`,
+          message: `Model discovery: ${errMsg}. Standard production models remain available.`,
         });
       }
     } catch (e: any) {
@@ -510,103 +549,6 @@ export const SettingsPage: React.FC = () => {
                 </span>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Groq Model Configuration */}
-        {selectedProvider === 'groq' && (
-          <div className="p-4 rounded-2xl bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 mb-5 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 font-bold text-xs">
-                <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Groq LPU Inference Settings (api.groq.com)</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleDiscoverModels}
-                disabled={isDiscovering}
-                className="text-[11px] font-bold px-3 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-zinc-800 dark:text-emerald-400 dark:hover:bg-zinc-700 transition flex items-center gap-1 cursor-pointer"
-              >
-                {isDiscovering ? (
-                  <span className="w-3 h-3 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <RotateCcw className="w-3 h-3" />
-                )}
-                <span>Discover Account Models</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div>
-                <label className="block font-semibold mb-1 opacity-80">Text Reasoning Model</label>
-                <select
-                  value={groqModelInput}
-                  onChange={(e) => setGroqModelInput(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
-                >
-                  <option value="openai/gpt-oss-120b">openai/gpt-oss-120b (Recommended High-Speed 120B)</option>
-                  <option value="qwen/qwen3.8-27b">qwen/qwen3.8-27b (Qwen Multimodal & Reasoning)</option>
-                  <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Ultra-Fast 20B)</option>
-                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Llama 3.3 70B)</option>
-                  <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fastest 8B)</option>
-                  <option value="mixtral-8x7b-32768">mixtral-8x7b-32768 (MoE)</option>
-                  {discoveredModels
-                    .filter(
-                      (m) =>
-                        ![
-                          'openai/gpt-oss-120b',
-                          'qwen/qwen3.8-27b',
-                          'openai/gpt-oss-20b',
-                          'llama-3.3-70b-versatile',
-                          'llama-3.1-8b-instant',
-                          'mixtral-8x7b-32768',
-                        ].includes(m) &&
-                        !m.includes('whisper') &&
-                        !m.includes('orpheus') &&
-                        !m.includes('guard')
-                    )
-                    .map((m) => (
-                      <option key={m} value={m}>
-                        {m} (Discovered on Account)
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold mb-1 opacity-80">Vision / Multimodal Model</label>
-                <select
-                  value={groqVisionModelInput}
-                  onChange={(e) => setGroqVisionModelInput(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono text-xs focus:outline-none"
-                >
-                  <option value="qwen/qwen3.8-27b">
-                    qwen/qwen3.8-27b (Recommended Qwen Multimodal)
-                  </option>
-                  <option value="meta-llama/llama-4-scout-17b-16e-instruct">
-                    meta-llama/llama-4-scout-17b-16e-instruct (Llama 4 Scout Vision)
-                  </option>
-                  <option value="meta-llama/llama-4-maverick-17b-128e-instruct">
-                    meta-llama/llama-4-maverick-17b-128e-instruct (High-Capacity Vision)
-                  </option>
-                  {discoveredModels
-                    .filter(
-                      (m) =>
-                        (m.includes('scout') || m.includes('maverick') || m.includes('qwen') || m.includes('vision')) &&
-                        ![
-                          'qwen/qwen3.8-27b',
-                          'meta-llama/llama-4-scout-17b-16e-instruct',
-                          'meta-llama/llama-4-maverick-17b-128e-instruct',
-                        ].includes(m)
-                    )
-                    .map((m) => (
-                      <option key={m} value={m}>
-                        {m} (Discovered on Account)
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </div>
           </div>
         )}
 

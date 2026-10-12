@@ -38,7 +38,7 @@ async function callAiWithProxyFallback(
 ): Promise<{ ok: boolean; status: number; data: any }> {
   const timeoutMs = options.timeoutMs || 10000;
 
-  // 1. Try server proxy route
+  // 1. Try server proxy route first
   try {
     const proxyController = new AbortController();
     const proxyTimeout = setTimeout(() => proxyController.abort(), timeoutMs);
@@ -56,13 +56,16 @@ async function callAiWithProxyFallback(
     });
     clearTimeout(proxyTimeout);
 
-    let parsedData: any = null;
     const contentType = proxyRes.headers.get('content-type') || '';
+    const isHtml = contentType.includes('text/html');
+    const isHandledByProxy = proxyRes.headers.get('x-ai-proxy') === 'vision-ai';
+
+    let parsedData: any = null;
     if (contentType.includes('application/json')) {
       try {
         parsedData = await proxyRes.json();
       } catch (_) {}
-    } else {
+    } else if (!isHtml) {
       const rawText = await proxyRes.text();
       try {
         parsedData = JSON.parse(rawText);
@@ -71,7 +74,10 @@ async function callAiWithProxyFallback(
       }
     }
 
-    if (proxyRes.status !== 502 && proxyRes.status !== 504) {
+    const isStaticRouteError = !isHandledByProxy && (proxyRes.status === 404 || proxyRes.status === 405 || isHtml);
+    const isGatewayError = proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504;
+
+    if (!isStaticRouteError && !isGatewayError && parsedData !== null) {
       return {
         ok: proxyRes.ok,
         status: proxyRes.status,
@@ -80,22 +86,32 @@ async function callAiWithProxyFallback(
     }
   } catch (_) {}
 
-  // 2. Direct browser fetch fallback
+  // 2. Direct browser fetch fallback (for CORS-enabled APIs like api.groq.com)
   const directController = new AbortController();
   const directTimeout = setTimeout(() => directController.abort(), timeoutMs);
   try {
     const directRes = await fetch(url, {
       method: options.method || 'POST',
       headers: options.headers || {},
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: options.body && options.method !== 'GET' ? JSON.stringify(options.body) : undefined,
       signal: directController.signal,
     });
     clearTimeout(directTimeout);
 
     let parsedData: any = null;
-    try {
-      parsedData = await directRes.json();
-    } catch (_) {}
+    const contentType = directRes.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        parsedData = await directRes.json();
+      } catch (_) {}
+    } else {
+      const rawText = await directRes.text();
+      try {
+        parsedData = JSON.parse(rawText);
+      } catch (_) {
+        parsedData = { text: rawText };
+      }
+    }
 
     return {
       ok: directRes.ok,

@@ -86,7 +86,7 @@ export function notifyApiKeyMissing(): void {
 /**
  * Universal proxy caller for external AI APIs.
  * First tries the backend `/api/ai/proxy` endpoint (preventing browser CORS issues and malformed request formats),
- * and gracefully falls back to direct client fetch if offline or in static preview.
+ * and gracefully falls back to direct client fetch if offline or in static preview / mobile PWA.
  */
 async function callAiWithProxyFallback(
   url: string,
@@ -117,13 +117,16 @@ async function callAiWithProxyFallback(
     });
     clearTimeout(proxyTimeout);
 
-    let parsedData: any = null;
     const contentType = proxyRes.headers.get('content-type') || '';
+    const isHtml = contentType.includes('text/html');
+    const isHandledByProxy = proxyRes.headers.get('x-ai-proxy') === 'vision-ai';
+
+    let parsedData: any = null;
     if (contentType.includes('application/json')) {
       try {
         parsedData = await proxyRes.json();
       } catch (_) {}
-    } else {
+    } else if (!isHtml) {
       const rawText = await proxyRes.text();
       try {
         parsedData = JSON.parse(rawText);
@@ -132,8 +135,14 @@ async function callAiWithProxyFallback(
       }
     }
 
-    // If server responded with a definitive upstream status (200, 400, 401, 403, 404, 429), return it
-    if (proxyRes.status !== 502 && proxyRes.status !== 504) {
+    // Only treat this as an authoritative upstream response if:
+    // 1) The proxy endpoint actually handled it (X-Ai-Proxy header present), OR
+    // 2) The response is genuine JSON and status is NOT a server/routing failure (not 404/405/502/503/504, and not HTML)
+    // If the proxy route is missing (e.g. static hosting 404 or SPA index.html), fall through to direct browser fetch!
+    const isStaticRouteError = !isHandledByProxy && (proxyRes.status === 404 || proxyRes.status === 405 || isHtml);
+    const isGatewayError = proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504;
+
+    if (!isStaticRouteError && !isGatewayError && parsedData !== null) {
       return {
         ok: proxyRes.ok,
         status: proxyRes.status,
@@ -144,22 +153,32 @@ async function callAiWithProxyFallback(
     // Fall through to direct fetch
   }
 
-  // 2. Direct browser fetch fallback
+  // 2. Direct browser fetch fallback (works with CORS-enabled endpoints like api.groq.com)
   const directController = new AbortController();
   const directTimeout = setTimeout(() => directController.abort(), timeoutMs);
   try {
     const directRes = await fetch(url, {
       method: options.method || 'POST',
       headers: options.headers || {},
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: options.body && options.method !== 'GET' ? JSON.stringify(options.body) : undefined,
       signal: directController.signal,
     });
     clearTimeout(directTimeout);
 
     let parsedData: any = null;
-    try {
-      parsedData = await directRes.json();
-    } catch (_) {}
+    const contentType = directRes.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        parsedData = await directRes.json();
+      } catch (_) {}
+    } else {
+      const rawText = await directRes.text();
+      try {
+        parsedData = JSON.parse(rawText);
+      } catch (_) {
+        parsedData = { text: rawText };
+      }
+    }
 
     return {
       ok: directRes.ok,
@@ -445,9 +464,10 @@ export async function testApiKey(
     const { getGroqModel, setGroqModel, setGroqVisionModel } = await import('./aiProviders');
     const configuredModel = getGroqModel();
 
-    // Discover available models on Groq via GET /v1/models
+    // Discover available models on Groq via GET https://api.groq.com/openai/v1/models
     let discoveredModels: string[] = [];
     let discoveredVisionModel = '';
+    let discoveryErrorStatus = 0;
     try {
       const modelsRes = await callAiWithProxyFallback('https://api.groq.com/openai/v1/models', {
         method: 'GET',
@@ -461,29 +481,37 @@ export async function testApiKey(
       if (modelsRes.status === 401 || modelsRes.status === 403) {
         return {
           ok: false,
-          message: `Groq Authentication Failed (HTTP ${modelsRes.status}): Invalid API key. Please check your key at console.groq.com.`,
+          message: `Groq Authentication Failed (HTTP ${modelsRes.status}): Invalid API key. Please verify your key at console.groq.com.`,
         };
       }
 
       if (modelsRes.status === 429) {
         return {
           ok: false,
-          message: 'Groq Rate Limit Exceeded (HTTP 429): Rate limit hit on console.groq.com.',
+          message: 'Groq Rate Limit Exceeded (HTTP 429): Quota exhausted or rate limit hit on console.groq.com.',
         };
       }
 
+      discoveryErrorStatus = modelsRes.status;
+
       if (modelsRes.ok && modelsRes.data?.data && Array.isArray(modelsRes.data.data)) {
         discoveredModels = modelsRes.data.data
-          .map((m: any) => (typeof m === 'string' ? m : m.id))
-          .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
-          .filter((id: string) => !id.includes('llama-3.2-11b-vision-preview') && !id.includes('llama-3.2-90b-vision-preview'));
+          .filter((m: any) => m && (typeof m === 'string' || (m.id && m.active !== false)))
+          .map((m: any) => (typeof m === 'string' ? m.trim() : String(m.id).trim()))
+          .filter(
+            (id: string) =>
+              id.length > 0 &&
+              !id.includes('llama-3.2-11b-vision-preview') &&
+              !id.includes('llama-3.2-90b-vision-preview')
+          );
 
         const visionMatch = discoveredModels.find(
           (m) =>
             m.includes('qwen') ||
             m.includes('llama-4-scout') ||
             m.includes('llama-4-maverick') ||
-            m.includes('vision')
+            m.includes('vision') ||
+            m.includes('multimodal')
         );
         if (visionMatch) {
           discoveredVisionModel = visionMatch;
@@ -491,7 +519,7 @@ export async function testApiKey(
       }
     } catch (_) {}
 
-    // Exclude audio/speech/moderation models that cannot do chat completions
+    // Exclude audio/speech/moderation/embedding models that cannot execute chat completions
     const isChatModel = (id: string) => {
       const lower = id.toLowerCase();
       return (
@@ -504,44 +532,46 @@ export async function testApiKey(
     };
     const chatDiscovered = discoveredModels.filter(isChatModel);
 
+    // Build model candidates: prefer verified models available on the account
     const candidateModels: string[] = [];
+
+    // 1. If configured model is discovered on account, test it first
     if (configuredModel && chatDiscovered.includes(configuredModel)) {
       candidateModels.push(configuredModel);
     }
 
-    const preferredOrder = [
+    // 2. Standard Groq production models in preferred order
+    const knownProductionOrder = [
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
       'openai/gpt-oss-120b',
       'qwen/qwen3.8-27b',
       'openai/gpt-oss-20b',
-      'llama-3.3-70b-versatile',
-      'llama-3.1-8b-instant',
       'meta-llama/llama-4-scout-17b-16e-instruct',
       'meta-llama/llama-4-maverick-17b-128e-instruct',
+      'gemma2-9b-it',
       'mixtral-8x7b-32768',
-      'allam-2-7b',
     ];
 
-    for (const p of preferredOrder) {
+    for (const p of knownProductionOrder) {
       if (chatDiscovered.includes(p) && !candidateModels.includes(p)) {
         candidateModels.push(p);
       }
     }
 
+    // 3. Add any other chat models discovered on the user's account
     for (const m of chatDiscovered) {
       if (!candidateModels.includes(m)) {
         candidateModels.push(m);
       }
     }
 
+    // 4. Fallback if model discovery list is empty: test standard models directly (never assume key is invalid just because discovery was empty)
     if (candidateModels.length === 0) {
       if (configuredModel) candidateModels.push(configuredModel);
-      candidateModels.push(
-        'openai/gpt-oss-120b',
-        'qwen/qwen3.8-27b',
-        'openai/gpt-oss-20b',
-        'llama-3.3-70b-versatile',
-        'llama-3.1-8b-instant'
-      );
+      for (const p of knownProductionOrder) {
+        if (!candidateModels.includes(p)) candidateModels.push(p);
+      }
     }
 
     let lastError = '';
@@ -565,11 +595,15 @@ export async function testApiKey(
 
         if (chatRes.ok) {
           setGroqModel(modelCandidate);
-          const activeVision = discoveredVisionModel || 'qwen/qwen3.8-27b';
+          const activeVision =
+            discoveredVisionModel ||
+            (chatDiscovered.includes('qwen/qwen3.8-27b')
+              ? 'qwen/qwen3.8-27b'
+              : (discoveredVisionModel || 'llama-3.3-70b-versatile'));
           setGroqVisionModel(activeVision);
           return {
             ok: true,
-            message: `Groq (Ultra Fast) API key verified successfully! Active model: ${modelCandidate} | Vision: ${activeVision}`,
+            message: `Groq (Ultra Fast) API key verified successfully! Active model: ${modelCandidate}${discoveredVisionModel ? ` | Vision: ${discoveredVisionModel}` : ''}`,
             discoveredModels: chatDiscovered,
             activeModel: modelCandidate,
             activeVisionModel: activeVision,
@@ -597,22 +631,32 @@ export async function testApiKey(
             message: `Groq Rate Limit Exceeded (HTTP 429): Quota exhausted or rate limit hit on console.groq.com.`,
           };
         }
+
+        // 404 indicates this specific model is not available on this tier/account, try next candidate!
+        if (chatRes.status === 404) {
+          continue;
+        }
       } catch (err: any) {
         lastError = err?.message || String(err);
       }
     }
 
     if (lastStatus === 404) {
-      const avail = chatDiscovered.length > 0 ? chatDiscovered.slice(0, 4).join(', ') : 'None discovered';
+      if (chatDiscovered.length > 0) {
+        return {
+          ok: false,
+          message: `Groq Model Unavailable (HTTP 404): The tested models could not be loaded. Discovered models on your account: ${chatDiscovered.slice(0, 4).join(', ')}. Please select one in settings.`,
+        };
+      }
       return {
         ok: false,
-        message: `Groq Model Not Found (HTTP 404): No available chat model found on your Groq account. Available models: ${avail}`,
+        message: `Groq Model Error (HTTP 404): No available chat model could be reached on api.groq.com. Please verify your account access at console.groq.com.`,
       };
     }
 
     return {
       ok: false,
-      message: `Groq Error: ${lastError || 'Could not connect to api.groq.com'}`,
+      message: `Groq Error: ${lastError || 'Could not connect to api.groq.com. Please check your network connection.'}`,
     };
   }
 

@@ -388,10 +388,11 @@ Respond ONLY with a JSON object adhering to this schema:
     }
   });
 
-  // Universal proxy endpoint for external AI providers (xAI Grok, DeepSeek, OpenAI, Claude, Custom)
+  // Universal proxy endpoint for external AI providers (Groq, xAI Grok, DeepSeek, OpenAI, Claude, Custom)
   // Eliminates browser CORS issues and resolves exact error payloads
   app.post('/api/ai/proxy', async (req, res) => {
     try {
+      res.setHeader('X-Ai-Proxy', 'vision-ai');
       const { url, method = 'POST', headers = {}, body } = req.body;
       if (!url) {
         return res.status(400).json({ error: 'url is required' });
@@ -423,9 +424,9 @@ Respond ONLY with a JSON object adhering to this schema:
       }
     } catch (proxyErr: any) {
       console.error('Error in /api/ai/proxy:', proxyErr);
-      return res.status(500).json({
+      return res.status(502).json({
         error: {
-          message: proxyErr.message || 'Proxy request failed',
+          message: proxyErr.message || 'Proxy request failed to connect to upstream',
         },
       });
     }

@@ -38,8 +38,8 @@ export const AI_PROVIDERS: Record<AIProviderId, ProviderConfig> = {
     id: 'groq',
     name: 'Groq (Ultra Fast)',
     tagline: 'Ultra-fast LPU inference (gsk_... keys)',
-    defaultModel: 'openai/gpt-oss-120b',
-    fallbackModel: 'qwen/qwen3.8-27b',
+    defaultModel: 'llama-3.3-70b-versatile',
+    fallbackModel: 'llama-3.1-8b-instant',
     storageKey: 'vision_ai_groq_key',
     baseUrl: 'https://api.groq.com/openai/v1',
     supportsVision: true,
@@ -259,25 +259,34 @@ export async function fetchProviderModels(
           },
         }),
       });
-      status = proxyRes.status;
-      if (proxyRes.ok) {
-        rawData = await proxyRes.json();
+
+      const contentType = proxyRes.headers.get('content-type') || '';
+      const isHtml = contentType.includes('text/html');
+      const isProxyHandled = proxyRes.headers.get('x-ai-proxy') === 'vision-ai';
+
+      if (!isHtml && (isProxyHandled || (proxyRes.status >= 200 && proxyRes.status < 400))) {
+        status = proxyRes.status;
+        if (proxyRes.ok) {
+          rawData = await proxyRes.json();
+        }
       }
     } catch (_) {}
 
-    // Direct browser fetch fallback
+    // Direct browser fetch fallback (works directly with CORS-enabled endpoints like api.groq.com)
     if (!rawData) {
-      const directRes = await fetch(endpoint, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${key}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      status = directRes.status;
-      if (directRes.ok) {
-        rawData = await directRes.json();
-      }
+      try {
+        const directRes = await fetch(endpoint, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${key}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        status = directRes.status;
+        if (directRes.ok) {
+          rawData = await directRes.json();
+        }
+      } catch (_) {}
     }
 
     if (!rawData || !rawData.data || !Array.isArray(rawData.data)) {
@@ -287,12 +296,13 @@ export async function fetchProviderModels(
       if (status === 429) {
         return { ok: false, models: [], visionModels: [], error: 'Rate limit / quota exceeded.' };
       }
-      return { ok: false, models: [], visionModels: [], error: `Endpoint returned HTTP ${status}` };
+      return { ok: false, models: [], visionModels: [], error: `Endpoint returned HTTP ${status || 'Connection Error'}` };
     }
 
     const ids: string[] = rawData.data
-      .map((item: any) => (typeof item === 'string' ? item : item.id))
-      .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+      .filter((m: any) => m && (typeof m === 'string' || (m.id && m.active !== false)))
+      .map((item: any) => (typeof item === 'string' ? item.trim() : String(item.id).trim()))
+      .filter((id: any) => typeof id === 'string' && id.length > 0)
       .filter((id: string) => !id.includes('llama-3.2-11b-vision-preview') && !id.includes('llama-3.2-90b-vision-preview'));
 
     const visionModels = ids.filter((id) => {
